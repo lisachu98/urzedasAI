@@ -1,0 +1,14 @@
+services:
+  docai:
+    build: .
+    container_name: docai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - /volume1/documents:/docs:ro   # ← point this at your uncle's docs folder
+    environment:
+      - DOCS_ROOT=/docs
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
