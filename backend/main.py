@@ -9,8 +9,12 @@ from pydantic import BaseModel
 from typing import Optional
 import anthropic
 import openai
-import google.generativeai as genai
-import fitz  # pymupdf – PDF text extraction for models that can't read raw PDFs
+from google import genai
+from google.genai import types as gtypes
+import fitz
+import re
+import time
+from functools import lru_cache
 
 app = FastAPI()
 
@@ -22,6 +26,99 @@ app.add_middleware(
 )
 
 DOCS_ROOT = os.environ.get("DOCS_ROOT", "/docs")
+
+# ── singleton API clients ────────────────────────────────────────────────────
+
+@lru_cache(maxsize=1)
+def get_anthropic_client() -> anthropic.Anthropic:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
+    return anthropic.Anthropic(api_key=api_key)
+
+@lru_cache(maxsize=1)
+def get_openai_client() -> openai.OpenAI:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+    return openai.OpenAI(api_key=api_key)
+
+@lru_cache(maxsize=1)
+def get_gemini_client() -> genai.Client:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set")
+    return genai.Client(api_key=api_key)
+
+@lru_cache(maxsize=1)
+def get_xai_client() -> openai.OpenAI:
+    api_key = os.environ.get("XAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="XAI_API_KEY not set")
+    return openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+
+# ── model listing (cached) ───────────────────────────────────────────────────
+
+_models_cache: dict = {"data": None, "ts": 0.0}
+_CACHE_TTL = 3600  # 1 hour
+_OAI_DATED_RE = re.compile(r"\d{4,}")  # filters out dated snapshots like gpt-4o-2024-08-06
+
+
+def fetch_available_models() -> dict:
+    """Query each provider for available models. Results cached for 1 hour."""
+    now = time.time()
+    if _models_cache["data"] and (now - _models_cache["ts"]) < _CACHE_TTL:
+        return _models_cache["data"]
+
+    result: dict[str, list] = {}
+
+    # ── Anthropic ──
+    try:
+        client = get_anthropic_client()
+        page = client.models.list(limit=100)
+        result["anthropic"] = sorted(
+            [{"id": m.id, "name": m.display_name} for m in page.data],
+            key=lambda x: x["name"],
+        )
+    except Exception:
+        result["anthropic"] = []
+
+    # ── OpenAI ──
+    try:
+        client = get_openai_client()
+        oai: list[dict] = []
+        for m in client.models.list().data:
+            mid = m.id
+            # only chat-capable model families
+            if not (mid.startswith("gpt-") or re.match(r"^o\d", mid) or mid.startswith("chatgpt")):
+                continue
+            # skip non-chat variants
+            if any(kw in mid for kw in ("realtime", "audio", "transcribe", "instruct", "search")):
+                continue
+            # skip dated snapshots (e.g. gpt-4o-2024-08-06)
+            if _OAI_DATED_RE.search(mid):
+                continue
+            oai.append({"id": mid, "name": mid})
+        result["openai"] = sorted(oai, key=lambda x: x["name"])
+    except Exception:
+        result["openai"] = []
+
+    # ── Gemini ──
+    try:
+        client = get_gemini_client()
+        gem: list[dict] = []
+        for m in client.models.list():
+            model_id = m.name.replace("models/", "") if m.name else ""
+            if not model_id.startswith("gemini"):
+                continue
+            gem.append({"id": model_id, "name": m.display_name or model_id})
+        result["gemini"] = sorted(gem, key=lambda x: x["name"])
+    except Exception:
+        result["gemini"] = []
+
+    _models_cache["data"] = result
+    _models_cache["ts"] = now
+    return result
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -141,7 +238,8 @@ def load_folder(folder_path: Path):
 class ChatRequest(BaseModel):
     project:  Optional[str] = None
     question: str
-    model:    str  # "claude" | "gpt4o" | "gemini"
+    provider: str  # "anthropic" | "openai" | "gemini"
+    model:    str  # actual model ID, e.g. "claude-sonnet-4-5"
     history:  Optional[list] = []
 
 
@@ -150,6 +248,11 @@ class ChatRequest(BaseModel):
 @app.get("/api/projects")
 def get_projects():
     return {"projects": list_projects()}
+
+
+@app.get("/api/models")
+def get_models():
+    return fetch_available_models()
 
 
 @app.post("/api/chat")
@@ -176,11 +279,8 @@ def chat(req: ChatRequest):
     )
 
     # ── Claude ───────────────────────────────────────────────────────────────
-    if req.model == "claude":
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
-        client   = anthropic.Anthropic(api_key=api_key)
+    if req.provider == "anthropic":
+        client = get_anthropic_client()
         # Strip internal keys from blocks before sending to Anthropic
         clean_content = []
         for block in user_content:
@@ -188,7 +288,7 @@ def chat(req: ChatRequest):
             clean_content.append(b)
         messages = (req.history or []) + [{"role": "user", "content": clean_content}]
         response = client.messages.create(
-            model      = "claude-sonnet-4-5",
+            model      = req.model,
             max_tokens = 4096,
             system     = system_prompt,
             messages   = messages,
@@ -196,11 +296,8 @@ def chat(req: ChatRequest):
         return {"answer": response.content[0].text}
 
     # ── GPT-4o ───────────────────────────────────────────────────────────────
-    elif req.model == "gpt4o":
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
-        client = openai.OpenAI(api_key=api_key)
+    elif req.provider == "openai":
+        client = get_openai_client()
 
         # convert blocks to OpenAI format
         def to_oai(block):
@@ -224,52 +321,94 @@ def chat(req: ChatRequest):
             messages.append(h)
         messages.append({"role": "user", "content": oai_content})
 
-        response = client.chat.completions.create(model="gpt-4o", messages=messages, max_tokens=4096)
+        response = client.chat.completions.create(model=req.model, messages=messages, max_tokens=4096)
         return {"answer": response.choices[0].message.content}
 
     # ── Gemini ────────────────────────────────────────────────────────────────
-    elif req.model == "gemini":
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set")
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name    = "gemini-1.5-pro",
-            system_instruction = system_prompt,
-        )
+    elif req.provider == "gemini":
+        client = get_gemini_client()
 
-        # Gemini parts for the current message
-        parts = []
+        # Build parts for the current message
+        parts: list = []
         for block in user_content:
             if block["type"] == "text":
-                parts.append(block["text"])
+                parts.append(gtypes.Part.from_text(text=block["text"]))
             elif block["type"] == "image":
                 src = block["source"]
-                parts.append({"mime_type": src["media_type"],
-                               "data": base64.b64decode(src["data"])})
+                parts.append(gtypes.Part.from_bytes(
+                    data=base64.b64decode(src["data"]),
+                    mime_type=src["media_type"],
+                ))
             elif block["type"] == "document":
-                parts.append({"mime_type": "application/pdf",
-                               "data": base64.b64decode(block["source"]["data"])})
+                parts.append(gtypes.Part.from_bytes(
+                    data=base64.b64decode(block["source"]["data"]),
+                    mime_type="application/pdf",
+                ))
+
+        config = gtypes.GenerateContentConfig(
+            system_instruction=system_prompt,
+            max_output_tokens=4096,
+        )
 
         # Build conversation history for Gemini
-        gemini_history = []
+        gemini_history: list = []
         for h in (req.history or []):
             role = "user" if h["role"] == "user" else "model"
-            gemini_history.append({"role": role, "parts": [h["content"]]})
+            gemini_history.append(gtypes.Content(
+                role=role,
+                parts=[gtypes.Part.from_text(text=h["content"])],
+            ))
 
         if gemini_history:
-            chat_session = model.start_chat(history=gemini_history)
+            chat_session = client.chats.create(
+                model=req.model,
+                config=config,
+                history=gemini_history,
+            )
             response = chat_session.send_message(parts)
         else:
-            response = model.generate_content(parts)
+            response = client.models.generate_content(
+                model=req.model,
+                contents=parts,
+                config=config,
+            )
 
         return {"answer": response.text}
 
+    # ── xAI (Grok) ────────────────────────────────────────────────────────────
+    elif req.provider == "xai":
+        client = get_xai_client()
+
+        # xAI uses OpenAI-compatible format
+        def to_xai(block):
+            if block["type"] == "text":
+                return {"type": "text", "text": block["text"]}
+            if block["type"] == "image":
+                src = block["source"]
+                return {"type": "image_url", "image_url": {
+                    "url": f"data:{src['media_type']};base64,{src['data']}"
+                }}
+            if block["type"] == "document":
+                pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
+                filename = block.get("_filename", "document.pdf")
+                return {"type": "text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
+            return {"type": "text", "text": ""}
+
+        xai_content = [to_xai(b) for b in user_content]
+        messages    = [{"role": "system", "content": system_prompt}]
+        for h in (req.history or []):
+            messages.append(h)
+        messages.append({"role": "user", "content": xai_content})
+
+        response = client.chat.completions.create(model=req.model, messages=messages, max_tokens=4096)
+        return {"answer": response.choices[0].message.content}
+
     else:
-        raise HTTPException(status_code=400, detail="Unknown model")
+        raise HTTPException(status_code=400, detail="Unknown provider")
 
 
 # serve frontend
 frontend_path = Path(__file__).parent.parent / "frontend"
 if frontend_path.exists():
     app.mount("/", StaticFiles(directory=str(frontend_path), html=True), name="static")
+

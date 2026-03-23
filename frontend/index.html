@@ -75,9 +75,24 @@
   .model-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     padding: 0 12px;
+    max-height: 40vh;
+    overflow-y: auto;
   }
+  .model-list::-webkit-scrollbar { width: 4px; }
+  .model-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .model-group-label {
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 10px 12px 4px;
+    font-weight: 600;
+  }
+  .model-group-label[data-provider="anthropic"] { color: var(--claude); }
+  .model-group-label[data-provider="openai"]    { color: var(--gpt); }
+  .model-group-label[data-provider="gemini"]    { color: var(--gemini); }
+  .model-group-label[data-provider="xai"]       { color: var(--xai); }
   .model-btn {
     display: flex;
     align-items: center;
@@ -92,15 +107,18 @@
     cursor: pointer;
     transition: all .15s;
     text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .model-btn:hover { background: var(--border); }
   .model-btn.active { border-color: var(--border); background: rgba(255,255,255,.04); }
   .model-btn .dot {
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   }
-  .model-btn[data-model="claude"]  .dot { background: var(--claude); }
-  .model-btn[data-model="gpt4o"]   .dot { background: var(--gpt); }
-  .model-btn[data-model="gemini"]  .dot { background: var(--gemini); }
+  .model-btn[data-provider="anthropic"] .dot { background: var(--claude); }
+  .model-btn[data-provider="openai"]    .dot { background: var(--gpt); }
+  .model-btn[data-provider="gemini"]    .dot { background: var(--gemini); }
   .model-btn.active .dot { box-shadow: 0 0 0 3px rgba(255,255,255,.1); }
 
   /* project list */
@@ -197,9 +215,10 @@
     border: 1px solid var(--border);
     color: var(--muted);
   }
-  .model-badge.claude { color: var(--claude); border-color: rgba(192,132,252,.3); background: rgba(192,132,252,.05); }
-  .model-badge.gpt4o  { color: var(--gpt);    border-color: rgba(96,165,250,.3);  background: rgba(96,165,250,.05); }
-  .model-badge.gemini { color: var(--gemini); border-color: rgba(249,115,22,.3);  background: rgba(249,115,22,.05); }
+  .model-badge.anthropic { color: var(--claude); border-color: rgba(192,132,252,.3); background: rgba(192,132,252,.05); }
+  .model-badge.openai    { color: var(--gpt);    border-color: rgba(96,165,250,.3);  background: rgba(96,165,250,.05); }
+  .model-badge.gemini    { color: var(--gemini); border-color: rgba(249,115,22,.3);  background: rgba(249,115,22,.05); }
+  .model-badge.xai       { color: var(--xai);    border-color: rgba(228,228,231,.3); background: rgba(228,228,231,.05); }
 
   /* chat */
   #chat {
@@ -412,16 +431,8 @@
   </div>
 
   <div class="section-label">Model</div>
-  <div class="model-list">
-    <button class="model-btn active" data-model="claude">
-      <span class="dot"></span> Claude Sonnet
-    </button>
-    <button class="model-btn" data-model="gpt4o">
-      <span class="dot"></span> GPT-4o
-    </button>
-    <button class="model-btn" data-model="gemini">
-      <span class="dot"></span> Gemini 1.5 Pro
-    </button>
+  <div class="model-list" id="model-list">
+    <div class="no-proj">Loading models…</div>
   </div>
 
   <div class="section-label">Project</div>
@@ -444,7 +455,7 @@
       <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:15px;" id="header-title">General Chat</div>
       <div class="context-badge" id="header-sub">No project selected</div>
     </div>
-    <div class="model-badge claude" id="model-badge">Claude Sonnet</div>
+    <div class="model-badge" id="model-badge">Loading…</div>
   </header>
 
   <div id="chat">
@@ -470,11 +481,77 @@
 <script>
 const API = '';  // same origin
 
+const PROVIDER_LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini', xai: 'xAI' };
+
 let state = {
-  model:   'claude',
-  project: null,
-  history: [],
+  provider:  null,
+  model:     null,
+  modelName: null,
+  project:   null,
+  history:   [],
 };
+
+// ── model list ────────────────────────────────────────────────────────────────
+async function loadModels() {
+  const el = document.getElementById('model-list');
+  try {
+    const res  = await fetch(`${API}/api/models`);
+    const data = await res.json();
+    renderModels(data);
+  } catch {
+    el.innerHTML = '<div class="no-proj">Could not load models</div>';
+  }
+}
+
+function renderModels(data) {
+  const el = document.getElementById('model-list');
+  const providers = ['anthropic', 'openai', 'gemini', 'xai'];
+  let html = '';
+  let firstModel = null;
+
+  for (const prov of providers) {
+    const models = data[prov];
+    if (!models || !models.length) continue;
+
+    html += `<div class="model-group-label" data-provider="${prov}">${PROVIDER_LABELS[prov]}</div>`;
+    for (const m of models) {
+      if (!firstModel) firstModel = { provider: prov, id: m.id, name: m.name };
+      html += `
+        <button class="model-btn" data-provider="${prov}" data-model="${m.id}">
+          <span class="dot"></span> ${m.name}
+        </button>`;
+    }
+  }
+
+  if (!html) {
+    el.innerHTML = '<div class="no-proj">No models available — check API keys</div>';
+    return;
+  }
+
+  el.innerHTML = html;
+
+  // select first model by default
+  if (firstModel) {
+    state.provider  = firstModel.provider;
+    state.model     = firstModel.id;
+    state.modelName = firstModel.name;
+    const firstBtn = el.querySelector('.model-btn');
+    if (firstBtn) firstBtn.classList.add('active');
+    updateHeader();
+  }
+
+  // click handlers
+  el.querySelectorAll('.model-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.provider  = btn.dataset.provider;
+      state.model     = btn.dataset.model;
+      state.modelName = btn.textContent.trim();
+      el.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      updateHeader();
+    });
+  });
+}
 
 // ── project list ──────────────────────────────────────────────────────────────
 async function loadProjects() {
@@ -516,18 +593,7 @@ function renderProjects(projects) {
   });
 }
 
-// ── model buttons ─────────────────────────────────────────────────────────────
-const MODEL_LABELS = { claude: 'Claude Sonnet', gpt4o: 'GPT-4o', gemini: 'Gemini 1.5 Pro' };
-
-document.querySelectorAll('.model-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    state.model = btn.dataset.model;
-    document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    updateHeader();
-  });
-});
-
+// ── sidebar buttons ───────────────────────────────────────────────────────────
 document.getElementById('clear-proj-btn').addEventListener('click', () => {
   state.project = null;
   state.history = [];
@@ -551,8 +617,8 @@ function updateHeader() {
       ? `Context: <span>${state.project}</span>`
       : 'No project selected';
   const badge = document.getElementById('model-badge');
-  badge.textContent  = MODEL_LABELS[state.model];
-  badge.className    = `model-badge ${state.model}`;
+  badge.textContent  = state.modelName || 'No model';
+  badge.className    = `model-badge ${state.provider || ''}`;
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
@@ -577,7 +643,7 @@ function appendMsg(role, text) {
 
   const meta   = document.createElement('div');
   meta.className = 'msg-meta';
-  meta.textContent = role === 'user' ? 'You' : MODEL_LABELS[state.model];
+  meta.textContent = role === 'user' ? 'You' : (state.modelName || 'AI');
 
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble';
@@ -604,7 +670,7 @@ function showTyping() {
   el.className = 'msg ai';
   el.id = 'typing';
   el.innerHTML = `
-    <div class="msg-meta">${MODEL_LABELS[state.model]}</div>
+    <div class="msg-meta">${state.modelName || 'AI'}</div>
     <div class="typing-indicator"><span></span><span></span><span></span></div>`;
   chat.appendChild(el);
   chat.scrollTop = chat.scrollHeight;
@@ -620,6 +686,10 @@ async function send() {
   const textarea = document.getElementById('question');
   const question = textarea.value.trim();
   if (!question) return;
+  if (!state.provider || !state.model) {
+    appendMsg('ai', 'No model selected. Please wait for models to load or check your API keys.');
+    return;
+  }
 
   textarea.value = '';
   textarea.style.height = 'auto';
@@ -635,6 +705,7 @@ async function send() {
       body: JSON.stringify({
         project:  state.project,
         question,
+        provider: state.provider,
         model:    state.model,
         history:  state.history,
       }),
@@ -678,8 +749,8 @@ document.getElementById('question').addEventListener('input', function() {
 });
 
 // ── init ──────────────────────────────────────────────────────────────────────
+loadModels();
 loadProjects();
-updateHeader();
 </script>
 </body>
 </html>

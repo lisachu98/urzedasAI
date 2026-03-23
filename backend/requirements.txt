@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 anthropic
 openai
-google-generativeai
+google-genai
 python-docx
 openpyxl
 python-multipart
