@@ -6,7 +6,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /volume1/documents:/docs:ro   # ← point this at your uncle's docs folder
+      - /volume1/documents:/docs:ro   #nas docs location
     environment:
       - DOCS_ROOT=/docs
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}

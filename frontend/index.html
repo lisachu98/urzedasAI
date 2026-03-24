@@ -16,11 +16,12 @@
     --border:   #272a30;
     --text:     #e8e9eb;
     --muted:    #6b7280;
-    --accent:   #e8c547;
+    --accent: #c11cff;
     --accent2:  #4ade80;
-    --claude:   #c084fc;
-    --gpt:      #60a5fa;
-    --gemini:   #f97316;
+    --claude:   #D97706;
+    --gpt:      #10A37F;
+    --gemini:   #4285F4;
+    --xai:      #e4e4e7;
     --radius:   10px;
   }
 
@@ -420,61 +421,106 @@
     transition: all .15s;
   }
   .new-chat-btn:hover { color: var(--text); border-color: var(--muted); }
+
+  /* web search toggle */
+  .web-search-btn {
+    flex-shrink: 0;
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .15s;
+  }
+  .web-search-btn:hover { color: var(--text); border-color: var(--muted); }
+  .web-search-btn.active {
+    color: var(--accent2);
+    border-color: rgba(74,222,128,.3);
+    background: rgba(74,222,128,.08);
+  }
+
+  /* language toggle */
+  .lang-btn {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .lang-btn:hover { color: var(--text); border-color: var(--muted); }
 </style>
 </head>
 <body>
 
 <aside>
   <div class="brand">
-    <h1>urzędasAI</h1>
-    <p>Project-aware assistant</p>
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h1>urzędasAI</h1>
+      <button id="lang-btn" class="lang-btn">EN</button>
+    </div>
+    <p id="brand-sub">Asystent projektowy</p>
   </div>
 
   <div class="section-label">Model</div>
   <div class="model-list" id="model-list">
-    <div class="no-proj">Loading models…</div>
+    <div class="no-proj">Ładowanie modeli…</div>
   </div>
 
-  <div class="section-label">Project</div>
-  <button class="clear-proj" id="clear-proj-btn">✦ No project (general chat)</button>
+  <div class="section-label" id="section-project">Projekt</div>
+  <button class="clear-proj" id="clear-proj-btn">✦ Bez projektu (czat ogólny)</button>
   <div class="project-list" id="project-list">
-    <div class="no-proj">Loading projects…</div>
+    <div class="no-proj">Ładowanie projektów…</div>
   </div>
 
   <button class="new-chat-btn" id="new-chat-btn">
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
       <path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
     </svg>
-    New conversation
+    <span id="new-chat-text">Nowa rozmowa</span>
   </button>
 </aside>
 
 <main>
   <header>
     <div class="header-left">
-      <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:15px;" id="header-title">General Chat</div>
-      <div class="context-badge" id="header-sub">No project selected</div>
+      <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:15px;" id="header-title">Czat ogólny</div>
+      <div class="context-badge" id="header-sub">Nie wybrano projektu</div>
     </div>
-    <div class="model-badge" id="model-badge">Loading…</div>
+    <div class="model-badge" id="model-badge">Ładowanie…</div>
   </header>
 
   <div id="chat">
     <div class="empty-state" id="empty-state">
       <div class="icon">✦</div>
-      <p>Select a project from the sidebar and ask anything about it.</p>
+      <p>Wybierz projekt z panelu bocznego i zadaj pytanie dotyczące jego zawartości.</p>
     </div>
   </div>
 
   <div class="input-area">
     <div class="input-wrap">
-      <textarea id="question" rows="1" placeholder="Ask something…"></textarea>
+      <textarea id="question" rows="1" placeholder="Zapytaj o coś…"></textarea>
+      <button id="web-search-btn" class="web-search-btn active" title="Przełącz wyszukiwanie w sieci">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="2" y1="12" x2="22" y2="12"/>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+      </button>
       <button id="send-btn">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
           <path d="M7 12V2M2 7l5-5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
     </div>
-    <div class="hint">Enter to send · Shift+Enter for new line</div>
+    <div class="hint" id="hint">Enter — wyślij · Shift+Enter — nowa linia · 🌐 wyszukiwanie w sieci</div>
   </div>
 </main>
 
@@ -483,13 +529,91 @@ const API = '';  // same origin
 
 const PROVIDER_LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini', xai: 'xAI' };
 
+// ── i18n ──────────────────────────────────────────────────────────────────────
+const I18N = {
+  pl: {
+    brandSub:         'Asystent projektowy',
+    sectionProject:   'Projekt',
+    clearProject:     '✦ Bez projektu (czat ogólny)',
+    loadingModels:    'Ładowanie modeli…',
+    loadingProjects:  'Ładowanie projektów…',
+    newChat:          'Nowy czat',
+    generalChat:      'Czat ogólny',
+    noProjectSelected:'Nie wybrano projektu',
+    loading:          'Ładowanie…',
+    emptyState:       'Wybierz projekt z panelu bocznego i zadaj pytanie dotyczące jego zawartości.',
+    placeholder:      'Zapytaj o coś…',
+    hint:             'Enter — wyślij · Shift+Enter — nowa linia · 🌐 wyszukiwanie w sieci',
+    webSearchTitle:   'Przełącz wyszukiwanie w sieci',
+    failedModels:     'Nie udało się załadować modeli',
+    noModels:         'Brak dostępnych modeli — sprawdź klucze API',
+    failedProjects:   'Nie udało się załadować projektów',
+    noFolders:        'Nie znaleziono folderów w /docs',
+    context:          'Kontekst',
+    noModel:          'Brak modelu',
+    projectLoaded:    'Projekt <strong style="color:var(--accent)">%s</strong> załadowany. Zadaj dowolne pytanie.',
+    selectProject:    'Wybierz projekt lub po prostu zacznij rozmowę.',
+    you:              'Ty',
+    noModelSelected:  'Nie wybrano modelu. Poczekaj na załadowanie modeli lub sprawdź klucze API.',
+    error:            'Błąd',
+    networkError:     'Błąd sieci',
+    langSwitch:       'EN',
+  },
+  en: {
+    brandSub:         'Project-aware assistant',
+    sectionProject:   'Project',
+    clearProject:     '✦ No project (general chat)',
+    loadingModels:    'Loading models…',
+    loadingProjects:  'Loading projects…',
+    newChat:          'New chat',
+    generalChat:      'General Chat',
+    noProjectSelected:'No project selected',
+    loading:          'Loading…',
+    emptyState:       'Select a project from the sidebar and ask anything about it.',
+    placeholder:      'Ask something…',
+    hint:             'Enter to send · Shift+Enter for new line · 🌐 toggle web search',
+    webSearchTitle:   'Toggle web search',
+    failedModels:     'Could not load models',
+    noModels:         'No models available — check API keys',
+    failedProjects:   'Could not load projects',
+    noFolders:        'No folders found in /docs',
+    context:          'Context',
+    noModel:          'No model',
+    projectLoaded:    'Project <strong style="color:var(--accent)">%s</strong> loaded. Ask anything about it.',
+    selectProject:    'Select a project or just start chatting.',
+    you:              'You',
+    noModelSelected:  'No model selected. Please wait for models to load or check your API keys.',
+    error:            'Error',
+    networkError:     'Network error',
+    langSwitch:       'PL',
+  },
+};
+
+let lang = localStorage.getItem('docai-lang') || 'pl';
+function t(key) { return I18N[lang][key]; }
+
 let state = {
   provider:  null,
   model:     null,
   modelName: null,
   project:   null,
   history:   [],
+  webSearch: true,
 };
+
+// ── apply language to static UI elements ──────────────────────────────────────
+function applyLang() {
+  document.getElementById('brand-sub').textContent       = t('brandSub');
+  document.getElementById('section-project').textContent = t('sectionProject');
+  document.getElementById('clear-proj-btn').textContent  = t('clearProject');
+  document.getElementById('new-chat-text').textContent   = t('newChat');
+  document.getElementById('question').placeholder        = t('placeholder');
+  document.getElementById('hint').textContent            = t('hint');
+  document.getElementById('web-search-btn').title        = t('webSearchTitle');
+  document.getElementById('lang-btn').textContent        = t('langSwitch');
+  updateHeader();
+  clearChat();
+}
 
 // ── model list ────────────────────────────────────────────────────────────────
 async function loadModels() {
@@ -499,7 +623,7 @@ async function loadModels() {
     const data = await res.json();
     renderModels(data);
   } catch {
-    el.innerHTML = '<div class="no-proj">Could not load models</div>';
+    el.innerHTML = `<div class="no-proj">${t('failedModels')}</div>`;
   }
 }
 
@@ -524,7 +648,7 @@ function renderModels(data) {
   }
 
   if (!html) {
-    el.innerHTML = '<div class="no-proj">No models available — check API keys</div>';
+    el.innerHTML = `<div class="no-proj">${t('noModels')}</div>`;
     return;
   }
 
@@ -561,14 +685,14 @@ async function loadProjects() {
     renderProjects(data.projects);
   } catch {
     document.getElementById('project-list').innerHTML =
-      '<div class="no-proj">Could not load projects</div>';
+      `<div class="no-proj">${t('failedProjects')}</div>`;
   }
 }
 
 function renderProjects(projects) {
   const el = document.getElementById('project-list');
   if (!projects.length) {
-    el.innerHTML = '<div class="no-proj">No folders found in /docs</div>';
+    el.innerHTML = `<div class="no-proj">${t('noFolders')}</div>`;
     return;
   }
   el.innerHTML = projects.map(p => `
@@ -608,16 +732,29 @@ document.getElementById('new-chat-btn').addEventListener('click', () => {
   clearChat();
 });
 
+// web search toggle
+document.getElementById('web-search-btn').addEventListener('click', () => {
+  state.webSearch = !state.webSearch;
+  document.getElementById('web-search-btn').classList.toggle('active', state.webSearch);
+});
+
+// language toggle
+document.getElementById('lang-btn').addEventListener('click', () => {
+  lang = lang === 'pl' ? 'en' : 'pl';
+  localStorage.setItem('docai-lang', lang);
+  applyLang();
+});
+
 // ── header ────────────────────────────────────────────────────────────────────
 function updateHeader() {
   document.getElementById('header-title').textContent =
-    state.project ? state.project : 'General Chat';
+    state.project ? state.project : t('generalChat');
   document.getElementById('header-sub').innerHTML =
     state.project
-      ? `Context: <span>${state.project}</span>`
-      : 'No project selected';
+      ? `${t('context')}: <span>${state.project}</span>`
+      : t('noProjectSelected');
   const badge = document.getElementById('model-badge');
-  badge.textContent  = state.modelName || 'No model';
+  badge.textContent  = state.modelName || t('noModel');
   badge.className    = `model-badge ${state.provider || ''}`;
 }
 
@@ -628,8 +765,8 @@ function clearChat() {
     <div class="empty-state" id="empty-state">
       <div class="icon">✦</div>
       <p>${state.project
-        ? `Project <strong style="color:var(--accent)">${state.project}</strong> loaded. Ask anything about it.`
-        : 'Select a project or just start chatting.'}</p>
+        ? t('projectLoaded').replace('%s', state.project)
+        : t('selectProject')}</p>
     </div>`;
 }
 
@@ -643,7 +780,7 @@ function appendMsg(role, text) {
 
   const meta   = document.createElement('div');
   meta.className = 'msg-meta';
-  meta.textContent = role === 'user' ? 'You' : (state.modelName || 'AI');
+  meta.textContent = role === 'user' ? t('you') : (state.modelName || 'AI');
 
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble';
@@ -687,7 +824,7 @@ async function send() {
   const question = textarea.value.trim();
   if (!question) return;
   if (!state.provider || !state.model) {
-    appendMsg('ai', 'No model selected. Please wait for models to load or check your API keys.');
+    appendMsg('ai', t('noModelSelected'));
     return;
   }
 
@@ -703,11 +840,12 @@ async function send() {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        project:  state.project,
+        project:    state.project,
         question,
-        provider: state.provider,
-        model:    state.model,
-        history:  state.history,
+        provider:   state.provider,
+        model:      state.model,
+        history:    state.history,
+        web_search: state.webSearch,
       }),
     });
 
@@ -715,7 +853,7 @@ async function send() {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
-      appendMsg('ai', `Error: ${err.detail || res.statusText}`);
+      appendMsg('ai', `${t('error')}: ${err.detail || res.statusText}`);
     } else {
       const data   = await res.json();
       const answer = data.answer;
@@ -730,7 +868,7 @@ async function send() {
     }
   } catch (e) {
     removeTyping();
-    appendMsg('ai', `Network error: ${e.message}`);
+    appendMsg('ai', `${t('networkError')}: ${e.message}`);
   }
 
   document.getElementById('send-btn').disabled = false;
@@ -749,6 +887,7 @@ document.getElementById('question').addEventListener('input', function() {
 });
 
 // ── init ──────────────────────────────────────────────────────────────────────
+applyLang();
 loadModels();
 loadProjects();
 </script>

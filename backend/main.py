@@ -116,6 +116,19 @@ def fetch_available_models() -> dict:
     except Exception:
         result["gemini"] = []
 
+    # ── xAI ──
+    try:
+        client = get_xai_client()
+        xai_models: list[dict] = []
+        for m in client.models.list().data:
+            mid = m.id
+            if not mid.startswith("grok"):
+                continue
+            xai_models.append({"id": mid, "name": mid})
+        result["xai"] = sorted(xai_models, key=lambda x: x["name"])
+    except Exception:
+        result["xai"] = []
+
     _models_cache["data"] = result
     _models_cache["ts"] = now
     return result
@@ -236,11 +249,12 @@ def load_folder(folder_path: Path):
 # ── request / response models ─────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    project:  Optional[str] = None
-    question: str
-    provider: str  # "anthropic" | "openai" | "gemini"
-    model:    str  # actual model ID, e.g. "claude-sonnet-4-5"
-    history:  Optional[list] = []
+    project:    Optional[str] = None
+    question:   str
+    provider:   str  # "anthropic" | "openai" | "gemini" | "xai"
+    model:      str  # actual model ID, e.g. "claude-sonnet-4-5"
+    history:    Optional[list] = []
+    web_search: Optional[bool] = True
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -287,19 +301,44 @@ def chat(req: ChatRequest):
             b = {k: v for k, v in block.items() if not k.startswith("_")}
             clean_content.append(b)
         messages = (req.history or []) + [{"role": "user", "content": clean_content}]
-        response = client.messages.create(
-            model      = req.model,
-            max_tokens = 4096,
-            system     = system_prompt,
-            messages   = messages,
-        )
-        return {"answer": response.content[0].text}
+        kwargs = dict(model=req.model, max_tokens=16000, system=system_prompt, messages=messages)
+        if req.web_search:
+            kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+        response = client.messages.create(**kwargs)
+        # Collect text from all content blocks (handles web search tool results too)
+        text_parts = [b.text for b in response.content if hasattr(b, "text")]
+        return {"answer": "\n\n".join(text_parts) if text_parts else "No response generated."}
 
     # ── GPT-4o ───────────────────────────────────────────────────────────────
     elif req.provider == "openai":
         client = get_openai_client()
 
-        # convert blocks to OpenAI format
+        if req.web_search:
+            # Use Responses API for built-in web search
+            def to_oai_resp(block):
+                if block["type"] == "text":
+                    return {"type": "input_text", "text": block["text"]}
+                if block["type"] == "image":
+                    src = block["source"]
+                    return {"type": "input_image", "image_url": f"data:{src['media_type']};base64,{src['data']}"}
+                if block["type"] == "document":
+                    pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
+                    filename = block.get("_filename", "document.pdf")
+                    return {"type": "input_text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
+                return {"type": "input_text", "text": ""}
+
+            resp_content = [to_oai_resp(b) for b in user_content]
+            messages = list(req.history or [])
+            messages.append({"role": "user", "content": resp_content})
+            response = client.responses.create(
+                model=req.model,
+                instructions=system_prompt,
+                input=messages,
+                tools=[{"type": "web_search_preview"}],
+            )
+            return {"answer": response.output_text}
+
+        # convert blocks to OpenAI Chat Completions format
         def to_oai(block):
             if block["type"] == "text":
                 return {"type": "text", "text": block["text"]}
@@ -348,6 +387,7 @@ def chat(req: ChatRequest):
         config = gtypes.GenerateContentConfig(
             system_instruction=system_prompt,
             max_output_tokens=4096,
+            tools=[gtypes.Tool(google_search=gtypes.GoogleSearch())] if req.web_search else None,
         )
 
         # Build conversation history for Gemini
@@ -400,7 +440,10 @@ def chat(req: ChatRequest):
             messages.append(h)
         messages.append({"role": "user", "content": xai_content})
 
-        response = client.chat.completions.create(model=req.model, messages=messages, max_tokens=4096)
+        kwargs = dict(model=req.model, messages=messages, max_tokens=4096)
+        if req.web_search:
+            kwargs["extra_body"] = {"search_parameters": {"mode": "auto", "max_search_results": 5}}
+        response = client.chat.completions.create(**kwargs)
         return {"answer": response.choices[0].message.content}
 
     else:
@@ -411,4 +454,3 @@ def chat(req: ChatRequest):
 frontend_path = Path(__file__).parent.parent / "frontend"
 if frontend_path.exists():
     app.mount("/", StaticFiles(directory=str(frontend_path), html=True), name="static")
-
