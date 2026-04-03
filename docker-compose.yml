@@ -6,13 +6,15 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /mnt/dane
+      - /mnt/nas/dane:/docs:ro
     environment:
       - DOCS_ROOT=/docs
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - XAI_API_KEY=${XAI_API_KEY}
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
 
   watchtower:
     image: containrrr/watchtower
