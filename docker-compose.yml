@@ -1,15 +1,24 @@
 services:
   urzedasai:
-    build: .
+    image: ghcr.io/lisachu98/urzedasai:latest
     container_name: urzedasai
     restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
-      - /volume1/documents:/docs:ro   #nas docs location
+      - /mnt/dane
     environment:
       - DOCS_ROOT=/docs
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - XAI_API_KEY=${XAI_API_KEY}
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_CLEANUP=true
