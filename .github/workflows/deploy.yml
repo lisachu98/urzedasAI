@@ -31,4 +31,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/urzedasai:latest
+          tags: ghcr.io/lisachu98/urzedasai:latest
