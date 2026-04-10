@@ -16,13 +16,14 @@
     --border:   #272a30;
     --text:     #e8e9eb;
     --muted:    #6b7280;
-    --accent: #c11cff;
+    --accent:   #c11cff;
     --accent2:  #4ade80;
     --claude:   #D97706;
     --gpt:      #10A37F;
     --gemini:   #4285F4;
     --xai:      #e4e4e7;
     --radius:   10px;
+    --fav:      #f43f5e;
   }
 
   body {
@@ -34,6 +35,59 @@
     grid-template-columns: 280px 1fr;
     grid-template-rows: 1fr;
     overflow: hidden;
+  }
+
+  /* ── USER PICKER OVERLAY ── */
+  .user-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.7);
+    backdrop-filter: blur(6px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  }
+  .user-overlay.hidden { display: none; }
+  .user-picker {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px 40px;
+    text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: 20px;
+  }
+  .user-picker h2 {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 20px;
+    color: var(--accent);
+  }
+  .user-picker p { font-size: 12px; color: var(--muted); }
+  .user-avatars {
+    display: flex; gap: 16px;
+  }
+  .user-avatar-btn {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 16px 24px;
+    border-radius: 12px;
+    border: 2px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .user-avatar-btn:hover {
+    border-color: var(--accent);
+    background: rgba(193,28,255,.06);
+  }
+  .user-avatar-circle {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 20px;
+    color: #fff;
   }
 
   /* ── SIDEBAR ── */
@@ -94,6 +148,7 @@
   .model-group-label[data-provider="openai"]    { color: var(--gpt); }
   .model-group-label[data-provider="gemini"]    { color: var(--gemini); }
   .model-group-label[data-provider="xai"]       { color: var(--xai); }
+  .model-group-label.favorites { color: var(--fav); }
   .model-btn {
     display: flex;
     align-items: center;
@@ -110,7 +165,6 @@
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
   }
   .model-btn:hover { background: var(--border); }
   .model-btn.active { border-color: var(--border); background: rgba(255,255,255,.04); }
@@ -120,7 +174,21 @@
   .model-btn[data-provider="anthropic"] .dot { background: var(--claude); }
   .model-btn[data-provider="openai"]    .dot { background: var(--gpt); }
   .model-btn[data-provider="gemini"]    .dot { background: var(--gemini); }
+  .model-btn[data-provider="xai"]       .dot { background: var(--xai); }
   .model-btn.active .dot { box-shadow: 0 0 0 3px rgba(255,255,255,.1); }
+  .model-btn .model-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .fav-heart {
+    flex-shrink: 0;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all .15s;
+    opacity: 0;
+    padding: 0 2px;
+  }
+  .model-btn:hover .fav-heart,
+  .fav-heart.active { opacity: 1; }
+  .fav-heart.active { color: var(--fav); }
 
   /* project list */
   .project-list {
@@ -142,10 +210,7 @@
   }
 
   /* folder tree */
-  .tree-node {
-    display: flex;
-    flex-direction: column;
-  }
+  .tree-node { display: flex; flex-direction: column; }
   .tree-row {
     display: flex;
     align-items: center;
@@ -191,10 +256,7 @@
     flex-shrink: 0;
     opacity: .6;
   }
-  .tree-children {
-    display: none;
-    flex-direction: column;
-  }
+  .tree-children { display: none; flex-direction: column; }
   .tree-children.open { display: flex; }
   .tree-loading {
     color: var(--muted);
@@ -244,6 +306,9 @@
     color: var(--accent);
     font-weight: 600;
   }
+  .header-right {
+    display: flex; align-items: center; gap: 10px;
+  }
   .model-badge {
     font-size: 11px;
     padding: 3px 10px;
@@ -255,6 +320,142 @@
   .model-badge.openai    { color: var(--gpt);    border-color: rgba(96,165,250,.3);  background: rgba(96,165,250,.05); }
   .model-badge.gemini    { color: var(--gemini); border-color: rgba(249,115,22,.3);  background: rgba(249,115,22,.05); }
   .model-badge.xai       { color: var(--xai);    border-color: rgba(228,228,231,.3); background: rgba(228,228,231,.05); }
+
+  /* user selector in header */
+  .user-switch {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 10px 4px 6px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all .15s;
+    position: relative;
+  }
+  .user-switch:hover { border-color: var(--muted); }
+  .user-switch .mini-avatar {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 10px;
+    color: #fff;
+  }
+  .user-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 150px;
+    z-index: 100;
+    display: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  }
+  .user-dropdown.open { display: block; }
+  .user-dropdown-item {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all .1s;
+  }
+  .user-dropdown-item:hover { background: var(--border); }
+  .user-dropdown-item.active { color: var(--accent); }
+
+  /* ── TAB BAR ── */
+  .tab-bar {
+    display: flex;
+    align-items: flex-end;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    flex-shrink: 0;
+    overflow-x: auto;
+    gap: 2px;
+  }
+  .tab-bar::-webkit-scrollbar { height: 0; }
+  .tab-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    background: transparent;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all .12s;
+    white-space: nowrap;
+    max-width: 180px;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .tab-item:hover { color: var(--text); background: rgba(255,255,255,.03); }
+  .tab-item.active {
+    color: var(--text);
+    background: var(--surface);
+    border-color: var(--border);
+  }
+  .tab-item.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 2px 2px 0 0;
+  }
+  .tab-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+  }
+  .tab-close {
+    flex-shrink: 0;
+    width: 16px; height: 16px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .1s;
+    opacity: 0;
+    line-height: 1;
+  }
+  .tab-item:hover .tab-close,
+  .tab-item.active .tab-close { opacity: 1; }
+  .tab-close:hover { background: rgba(255,255,255,.1); color: var(--text); }
+  .tab-new {
+    display: flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px;
+    margin-bottom: 4px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all .12s;
+    flex-shrink: 0;
+  }
+  .tab-new:hover { color: var(--text); border-color: var(--muted); }
 
   /* chat */
   #chat {
@@ -495,6 +696,15 @@
 </head>
 <body>
 
+<!-- ── USER PICKER OVERLAY ── -->
+<div class="user-overlay" id="user-overlay">
+  <div class="user-picker">
+    <h2>urzędasAI</h2>
+    <p id="picker-prompt">Wybierz użytkownika</p>
+    <div class="user-avatars" id="user-avatars"></div>
+  </div>
+</div>
+
 <aside>
   <div class="brand">
     <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -529,8 +739,20 @@
       <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:15px;" id="header-title">Czat ogólny</div>
       <div class="context-badge" id="header-sub">Nie wybrano projektu</div>
     </div>
-    <div class="model-badge" id="model-badge">Ładowanie…</div>
+    <div class="header-right">
+      <div class="model-badge" id="model-badge">Ładowanie…</div>
+      <!-- user switcher -->
+      <div class="user-switch" id="user-switch" style="display:none;">
+        <div class="mini-avatar" id="mini-avatar"></div>
+        <span id="user-name-label"></span>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="opacity:.5"><path d="M2.5 4l2.5 2.5L7.5 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        <div class="user-dropdown" id="user-dropdown"></div>
+      </div>
+    </div>
   </header>
+
+  <!-- ── TAB BAR ── -->
+  <div class="tab-bar" id="tab-bar"></div>
 
   <div id="chat">
     <div class="empty-state" id="empty-state">
@@ -564,6 +786,12 @@ const API = '';  // same origin
 
 const PROVIDER_LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini', xai: 'xAI' };
 
+const USERS = [
+  { name: 'Jarek',   color: '#6366f1' },
+  { name: 'Justyna', color: '#ec4899' },
+  { name: 'Max',     color: '#f59e0b' },
+];
+
 // ── i18n ──────────────────────────────────────────────────────────────────────
 const I18N = {
   pl: {
@@ -594,6 +822,8 @@ const I18N = {
     error:            'Błąd',
     networkError:     'Błąd sieci',
     langSwitch:       'EN',
+    pickerPrompt:     'Wybierz użytkownika',
+    favorites:        '★ Ulubione',
   },
   en: {
     brandSub:         'Project-aware assistant',
@@ -623,68 +853,252 @@ const I18N = {
     error:            'Error',
     networkError:     'Network error',
     langSwitch:       'PL',
+    pickerPrompt:     'Choose your user',
+    favorites:        '★ Favorites',
   },
 };
 
 let lang = localStorage.getItem('docai-lang') || 'pl';
 function t(key) { return I18N[lang][key]; }
 
+// ── user management ───────────────────────────────────────────────────────────
+let currentUser = localStorage.getItem('docai-current-user') || null;
+
+function getUserColor(name) {
+  const u = USERS.find(u => u.name === name);
+  return u ? u.color : '#888';
+}
+
+// ── state ─────────────────────────────────────────────────────────────────────
 let state = {
   provider:  null,
   model:     null,
   modelName: null,
   project:   null,
   history:   [],
-  messages:  [],          // [{role:'user'|'ai', text, modelName}]
+  messages:  [],
   webSearch: true,
+  activeTabId: null,
 };
 
-// ── per-project chat persistence (survives refresh via localStorage) ─────────
-const STORE_KEY = 'docai-chats';
-
-// Load from localStorage on startup
+// ── per-user chat persistence ────────────────────────────────────────────────
 let chatStore = {};
-try {
-  const raw = localStorage.getItem(STORE_KEY);
-  if (raw) chatStore = JSON.parse(raw);
-} catch { chatStore = {}; }
+let favorites = new Set();
+let _cachedModelsData = null;
+
+function storeKey() { return 'docai-chats-' + currentUser; }
+function favKey()   { return 'docai-favorites-' + currentUser; }
+
+function loadUserData() {
+  chatStore = {};
+  favorites = new Set();
+  if (!currentUser) return;
+  try {
+    const raw = localStorage.getItem(storeKey());
+    if (raw) chatStore = JSON.parse(raw);
+  } catch { chatStore = {}; }
+  // migrate old format entries (flat {history, messages} → tabbed)
+  for (const key of Object.keys(chatStore)) {
+    const entry = chatStore[key];
+    if (entry && entry.messages && !entry.tabs) {
+      chatStore[key] = {
+        tabs: [{ id: _genId(), name: _tabNameFromMessages(entry.messages), history: entry.history || [], messages: entry.messages }],
+        activeTab: null,
+      };
+      chatStore[key].activeTab = chatStore[key].tabs[0].id;
+    }
+  }
+  try {
+    const raw = localStorage.getItem(favKey());
+    if (raw) favorites = new Set(JSON.parse(raw));
+  } catch { favorites = new Set(); }
+}
 
 function chatKey(proj) { return proj || '__general__'; }
 
+function _genId() { return 't_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6); }
+
+function _tabNameFromMessages(msgs) {
+  if (!msgs || !msgs.length) return t('newChat');
+  const first = msgs.find(m => m.role === 'user');
+  if (first) return first.text.slice(0, 24) + (first.text.length > 24 ? '…' : '');
+  return t('newChat');
+}
+
 function _persistStore() {
+  if (!currentUser) return;
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(chatStore));
+    localStorage.setItem(storeKey(), JSON.stringify(chatStore));
   } catch (e) {
-    // localStorage full — trim oldest chats
     const keys = Object.keys(chatStore);
     if (keys.length > 1) {
       delete chatStore[keys[0]];
-      try { localStorage.setItem(STORE_KEY, JSON.stringify(chatStore)); } catch {}
+      try { localStorage.setItem(storeKey(), JSON.stringify(chatStore)); } catch {}
     }
   }
 }
 
+function _persistFavorites() {
+  if (!currentUser) return;
+  try {
+    localStorage.setItem(favKey(), JSON.stringify([...favorites]));
+  } catch {}
+}
+
+function getProjectData(proj) {
+  const key = chatKey(proj);
+  if (!chatStore[key] || !chatStore[key].tabs) {
+    chatStore[key] = {
+      tabs: [{ id: _genId(), name: t('newChat'), history: [], messages: [] }],
+      activeTab: null,
+    };
+    chatStore[key].activeTab = chatStore[key].tabs[0].id;
+  }
+  return chatStore[key];
+}
+
+function getActiveTab(proj) {
+  const pd = getProjectData(proj);
+  let tab = pd.tabs.find(tb => tb.id === pd.activeTab);
+  if (!tab && pd.tabs.length) {
+    tab = pd.tabs[0];
+    pd.activeTab = tab.id;
+  }
+  return tab;
+}
+
 function saveCurrentChat() {
-  const key = chatKey(state.project);
-  chatStore[key] = {
-    history:     state.history.slice(),
-    messages:    state.messages.slice(),
-  };
+  if (!currentUser) return;
+  const pd = getProjectData(state.project);
+  const tab = pd.tabs.find(tb => tb.id === pd.activeTab);
+  if (tab) {
+    tab.history  = state.history.slice();
+    tab.messages = state.messages.slice();
+    // auto-name tab from first user message
+    if (tab.name === t('newChat') || tab.name === I18N.pl.newChat || tab.name === I18N.en.newChat) {
+      tab.name = _tabNameFromMessages(tab.messages);
+    }
+  }
   _persistStore();
 }
 
 function restoreChat(proj) {
-  const key = chatKey(proj);
-  const saved = chatStore[key];
-  if (saved && saved.messages.length) {
-    state.history  = saved.history.slice();
-    state.messages = saved.messages.slice();
+  const pd = getProjectData(proj);
+  const tab = getActiveTab(proj);
+  state.activeTabId = tab ? tab.id : null;
+  if (tab && tab.messages && tab.messages.length) {
+    state.history  = (tab.history || []).slice();
+    state.messages = tab.messages.slice();
     rerenderMessages();
   } else {
     state.history  = [];
     state.messages = [];
     showEmptyState();
   }
+  renderTabs();
+}
+
+function switchToTab(proj, tabId) {
+  saveCurrentChat();
+  const pd = getProjectData(proj);
+  pd.activeTab = tabId;
+  state.activeTabId = tabId;
+  const tab = pd.tabs.find(tb => tb.id === tabId);
+  if (tab && tab.messages && tab.messages.length) {
+    state.history  = (tab.history || []).slice();
+    state.messages = tab.messages.slice();
+    rerenderMessages();
+  } else {
+    state.history  = [];
+    state.messages = [];
+    showEmptyState();
+  }
+  _persistStore();
+  renderTabs();
+}
+
+function createNewTab(proj) {
+  saveCurrentChat();
+  const pd = getProjectData(proj);
+  const newTab = { id: _genId(), name: t('newChat'), history: [], messages: [] };
+  pd.tabs.push(newTab);
+  pd.activeTab = newTab.id;
+  state.activeTabId = newTab.id;
+  state.history  = [];
+  state.messages = [];
+  _persistStore();
+  showEmptyState();
+  renderTabs();
+}
+
+function closeTab(proj, tabId) {
+  const pd = getProjectData(proj);
+  if (pd.tabs.length <= 1) {
+    // last tab — just clear it
+    const tab = pd.tabs[0];
+    tab.history = [];
+    tab.messages = [];
+    tab.name = t('newChat');
+    pd.activeTab = tab.id;
+    state.activeTabId = tab.id;
+    state.history = [];
+    state.messages = [];
+    _persistStore();
+    showEmptyState();
+    renderTabs();
+    return;
+  }
+  const idx = pd.tabs.findIndex(tb => tb.id === tabId);
+  pd.tabs.splice(idx, 1);
+  if (pd.activeTab === tabId) {
+    const newIdx = Math.min(idx, pd.tabs.length - 1);
+    pd.activeTab = pd.tabs[newIdx].id;
+    switchToTab(proj, pd.activeTab);
+  } else {
+    _persistStore();
+    renderTabs();
+  }
+}
+
+// ── render tabs ───────────────────────────────────────────────────────────────
+function renderTabs() {
+  const bar = document.getElementById('tab-bar');
+  const pd = getProjectData(state.project);
+  bar.innerHTML = '';
+
+  for (const tab of pd.tabs) {
+    const el = document.createElement('button');
+    el.className = 'tab-item' + (tab.id === pd.activeTab ? ' active' : '');
+    el.dataset.tabId = tab.id;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'tab-name';
+    nameSpan.textContent = tab.name;
+    el.appendChild(nameSpan);
+
+    const closeBtn = document.createElement('span');
+    closeBtn.className = 'tab-close';
+    closeBtn.innerHTML = '×';
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTab(state.project, tab.id);
+    });
+    el.appendChild(closeBtn);
+
+    el.addEventListener('click', () => {
+      if (tab.id !== pd.activeTab) switchToTab(state.project, tab.id);
+    });
+
+    bar.appendChild(el);
+  }
+
+  // add "+" button
+  const addBtn = document.createElement('button');
+  addBtn.className = 'tab-new';
+  addBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  addBtn.title = t('newChat');
+  addBtn.addEventListener('click', () => createNewTab(state.project));
+  bar.appendChild(addBtn);
 }
 
 function rerenderMessages() {
@@ -692,7 +1106,7 @@ function rerenderMessages() {
   chat.innerHTML = '';
   for (const m of state.messages) {
     const wrap = document.createElement('div');
-    wrap.className = `msg ${m.role}`;
+    wrap.className = 'msg ' + m.role;
 
     const meta = document.createElement('div');
     meta.className = 'msg-meta';
@@ -715,13 +1129,13 @@ function rerenderMessages() {
 
 function showEmptyState() {
   const chat = document.getElementById('chat');
-  chat.innerHTML = `
-    <div class="empty-state" id="empty-state">
-      <div class="icon">✦</div>
-      <p>${state.project
+  chat.innerHTML =
+    '<div class="empty-state" id="empty-state">' +
+      '<div class="icon">✦</div>' +
+      '<p>' + (state.project
         ? t('projectLoaded').replace('%s', state.project)
-        : t('selectProject')}</p>
-    </div>`;
+        : t('selectProject')) + '</p>' +
+    '</div>';
 }
 
 // ── apply language to static UI elements ──────────────────────────────────────
@@ -734,20 +1148,80 @@ function applyLang() {
   document.getElementById('hint').textContent            = t('hint');
   document.getElementById('web-search-btn').title        = t('webSearchTitle');
   document.getElementById('lang-btn').textContent        = t('langSwitch');
+  document.getElementById('picker-prompt').textContent   = t('pickerPrompt');
   updateHeader();
   if (state.messages.length) rerenderMessages();
   else showEmptyState();
+  renderTabs();
 }
+
+// ── user picker & switcher ────────────────────────────────────────────────────
+function renderUserPicker() {
+  const container = document.getElementById('user-avatars');
+  container.innerHTML = '';
+  for (const u of USERS) {
+    const btn = document.createElement('button');
+    btn.className = 'user-avatar-btn';
+    btn.innerHTML = '<div class="user-avatar-circle" style="background:' + u.color + '">' + u.name[0] + '</div>' + u.name;
+    btn.addEventListener('click', () => selectUser(u.name));
+    container.appendChild(btn);
+  }
+}
+
+function selectUser(name) {
+  if (currentUser) saveCurrentChat();
+  currentUser = name;
+  localStorage.setItem('docai-current-user', name);
+  document.getElementById('user-overlay').classList.add('hidden');
+  loadUserData();
+  updateUserUI();
+  if (_cachedModelsData) renderModels(_cachedModelsData);
+  restoreChat(state.project);
+}
+
+function updateUserUI() {
+  const sw = document.getElementById('user-switch');
+  if (!currentUser) { sw.style.display = 'none'; return; }
+  sw.style.display = 'flex';
+  const color = getUserColor(currentUser);
+  document.getElementById('mini-avatar').style.background = color;
+  document.getElementById('mini-avatar').textContent = currentUser[0];
+  document.getElementById('user-name-label').textContent = currentUser;
+
+  const dd = document.getElementById('user-dropdown');
+  dd.innerHTML = '';
+  for (const u of USERS) {
+    const btn = document.createElement('button');
+    btn.className = 'user-dropdown-item' + (u.name === currentUser ? ' active' : '');
+    btn.innerHTML = '<div style="width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;background:' + u.color + ';font-family:Syne,sans-serif;">' + u.name[0] + '</div>' + u.name;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dd.classList.remove('open');
+      if (u.name !== currentUser) selectUser(u.name);
+    });
+    dd.appendChild(btn);
+  }
+}
+
+// toggle user dropdown
+document.getElementById('user-switch').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('user-dropdown').classList.toggle('open');
+});
+document.addEventListener('click', () => {
+  document.getElementById('user-dropdown').classList.remove('open');
+});
 
 // ── model list ────────────────────────────────────────────────────────────────
 async function loadModels() {
   const el = document.getElementById('model-list');
   try {
-    const res  = await fetch(`${API}/api/models`);
+    const res  = await fetch(API + '/api/models');
     const data = await res.json();
+    _cachedModelsData = data;
     renderModels(data);
   } catch {
-    el.innerHTML = `<div class="no-proj">${t('failedModels')}</div>`;
+    el.innerHTML = '<div class="no-proj">' + t('failedModels') + '</div>';
   }
 }
 
@@ -756,78 +1230,114 @@ function renderModels(data) {
   const providers = ['anthropic', 'openai', 'gemini', 'xai'];
   let html = '';
   let firstModel = null;
+  let allModels = [];
 
   for (const prov of providers) {
     const models = data[prov];
     if (!models || !models.length) continue;
+    for (const m of models) {
+      allModels.push({ provider: prov, id: m.id, name: m.name });
+    }
+  }
 
-    html += `<div class="model-group-label" data-provider="${prov}">${PROVIDER_LABELS[prov]}</div>`;
+  // favorites section
+  const favModels = allModels.filter(m => favorites.has(m.id));
+  if (favModels.length) {
+    html += '<div class="model-group-label favorites">' + t('favorites') + '</div>';
+    for (const m of favModels) {
+      if (!firstModel) firstModel = m;
+      html += _modelBtnHtml(m.provider, m.id, m.name, true);
+    }
+  }
+
+  // by provider
+  for (const prov of providers) {
+    const models = data[prov];
+    if (!models || !models.length) continue;
+    html += '<div class="model-group-label" data-provider="' + prov + '">' + PROVIDER_LABELS[prov] + '</div>';
     for (const m of models) {
       if (!firstModel) firstModel = { provider: prov, id: m.id, name: m.name };
-      html += `
-        <button class="model-btn" data-provider="${prov}" data-model="${m.id}">
-          <span class="dot"></span> ${m.name}
-        </button>`;
+      html += _modelBtnHtml(prov, m.id, m.name, favorites.has(m.id));
     }
   }
 
   if (!html) {
-    el.innerHTML = `<div class="no-proj">${t('noModels')}</div>`;
+    el.innerHTML = '<div class="no-proj">' + t('noModels') + '</div>';
     return;
   }
 
   el.innerHTML = html;
 
-  // select first model by default
-  if (firstModel) {
+  // restore active model
+  if (state.model) {
+    el.querySelectorAll('.model-btn[data-model="' + state.model + '"]').forEach(b => b.classList.add('active'));
+  } else if (firstModel) {
     state.provider  = firstModel.provider;
     state.model     = firstModel.id;
     state.modelName = firstModel.name;
-    const firstBtn = el.querySelector('.model-btn');
-    if (firstBtn) firstBtn.classList.add('active');
+    const btn = el.querySelector('.model-btn');
+    if (btn) btn.classList.add('active');
     updateHeader();
   }
 
   // click handlers
   el.querySelectorAll('.model-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      if (e.target.closest('.fav-heart')) return;
       state.provider  = btn.dataset.provider;
       state.model     = btn.dataset.model;
-      state.modelName = btn.textContent.trim();
+      state.modelName = btn.querySelector('.model-name').textContent.trim();
       el.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+      el.querySelectorAll('.model-btn[data-model="' + state.model + '"]').forEach(b => b.classList.add('active'));
       updateHeader();
     });
   });
+
+  // heart handlers
+  el.querySelectorAll('.fav-heart').forEach(heart => {
+    heart.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const modelId = heart.dataset.modelId;
+      if (favorites.has(modelId)) favorites.delete(modelId);
+      else favorites.add(modelId);
+      _persistFavorites();
+      renderModels(data);
+    });
+  });
+}
+
+function _modelBtnHtml(provider, id, name, isFav) {
+  return '<button class="model-btn" data-provider="' + provider + '" data-model="' + id + '">' +
+    '<span class="dot"></span>' +
+    '<span class="model-name">' + name + '</span>' +
+    '<span class="fav-heart' + (isFav ? ' active' : '') + '" data-model-id="' + id + '">' + (isFav ? '♥' : '♡') + '</span>' +
+    '</button>';
 }
 
 // ── project tree browser ──────────────────────────────────────────────────────
 async function loadProjects() {
   const el = document.getElementById('project-list');
-  el.innerHTML = `<div class="no-proj">${t('loadingProjects')}</div>`;
+  el.innerHTML = '<div class="no-proj">' + t('loadingProjects') + '</div>';
   try {
-    const res = await fetch(`${API}/api/browse?path=`);
+    const res = await fetch(API + '/api/browse?path=');
     const data = await res.json();
     renderTree(data.children, el, 0);
   } catch {
-    el.innerHTML = `<div class="no-proj">${t('failedProjects')}</div>`;
+    el.innerHTML = '<div class="no-proj">' + t('failedProjects') + '</div>';
   }
 }
 
-const FOLDER_SVG = `<svg class="folder-icon" width="13" height="13" viewBox="0 0 13 13" fill="none">
-  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.086a1.5 1.5 0 0 1 1.06.44l.415.414A1.5 1.5 0 0 0 7.12 3.5H10.5A1.5 1.5 0 0 1 12 5v5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 1 10V3.5Z"
-    stroke="currentColor" stroke-width="1.2"/>
-</svg>`;
+const FOLDER_SVG = '<svg class="folder-icon" width="13" height="13" viewBox="0 0 13 13" fill="none">' +
+  '<path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.086a1.5 1.5 0 0 1 1.06.44l.415.414A1.5 1.5 0 0 0 7.12 3.5H10.5A1.5 1.5 0 0 1 12 5v5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 1 10V3.5Z" stroke="currentColor" stroke-width="1.2"/>' +
+  '</svg>';
 
-const CHEVRON_SVG = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-  <path d="M3.5 2l3.5 3-3.5 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>`;
+const CHEVRON_SVG = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none">' +
+  '<path d="M3.5 2l3.5 3-3.5 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '</svg>';
 
 function renderTree(children, parentEl, depth) {
   if (!children || !children.length) {
-    if (depth === 0) {
-      parentEl.innerHTML = `<div class="no-proj">${t('noFolders')}</div>`;
-    }
+    if (depth === 0) parentEl.innerHTML = '<div class="no-proj">' + t('noFolders') + '</div>';
     return;
   }
   if (depth === 0) parentEl.innerHTML = '';
@@ -857,7 +1367,7 @@ function renderTree(children, parentEl, depth) {
     if (item.file_count > 0) {
       const badge = document.createElement('span');
       badge.className = 'tree-badge';
-      badge.textContent = `${item.file_count}`;
+      badge.textContent = '' + item.file_count;
       row.appendChild(badge);
     }
 
@@ -868,22 +1378,15 @@ function renderTree(children, parentEl, depth) {
     node.appendChild(childContainer);
     parentEl.appendChild(node);
 
-    // click handler
     row.addEventListener('click', async () => {
-      // save current chat before switching
       saveCurrentChat();
-
-      // select this folder as active project
       document.querySelectorAll('.tree-row').forEach(r => r.classList.remove('active'));
       row.classList.add('active');
       state.project = item.path;
       document.getElementById('clear-proj-btn').style.opacity = '.6';
       updateHeader();
-
-      // restore chat for this project (or show empty state)
       restoreChat(item.path);
 
-      // toggle expand/collapse if has children
       if (item.has_children) {
         const isOpen = childContainer.classList.contains('open');
         if (isOpen) {
@@ -891,12 +1394,11 @@ function renderTree(children, parentEl, depth) {
           chevron.classList.remove('open');
         } else {
           chevron.classList.add('open');
-          // load children if not yet loaded
           if (!childContainer.dataset.loaded) {
-            childContainer.innerHTML = `<div class="tree-loading" style="padding-left:${8 + (depth+1)*16}px">…</div>`;
+            childContainer.innerHTML = '<div class="tree-loading" style="padding-left:' + (8 + (depth+1)*16) + 'px">…</div>';
             childContainer.classList.add('open');
             try {
-              const res = await fetch(`${API}/api/browse?path=${encodeURIComponent(item.path)}`);
+              const res = await fetch(API + '/api/browse?path=' + encodeURIComponent(item.path));
               const data = await res.json();
               childContainer.innerHTML = '';
               renderTree(data.children, childContainer, depth + 1);
@@ -923,11 +1425,7 @@ document.getElementById('clear-proj-btn').addEventListener('click', () => {
 });
 
 document.getElementById('new-chat-btn').addEventListener('click', () => {
-  state.history  = [];
-  state.messages = [];
-  delete chatStore[chatKey(state.project)];
-  _persistStore();
-  showEmptyState();
+  createNewTab(state.project);
 });
 
 // web search toggle
@@ -950,11 +1448,11 @@ function updateHeader() {
     projName ? projName : t('generalChat');
   document.getElementById('header-sub').innerHTML =
     state.project
-      ? `${t('context')}: <span>${state.project}</span>`
+      ? t('context') + ': <span>' + state.project + '</span>'
       : t('noProjectSelected');
   const badge = document.getElementById('model-badge');
   badge.textContent  = state.modelName || t('noModel');
-  badge.className    = `model-badge ${state.provider || ''}`;
+  badge.className    = 'model-badge ' + (state.provider || '');
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
@@ -962,12 +1460,11 @@ function appendMsg(role, text) {
   const empty = document.getElementById('empty-state');
   if (empty) empty.remove();
 
-  // track for persistence
-  state.messages.push({ role, text, modelName: state.modelName || 'AI' });
+  state.messages.push({ role: role, text: text, modelName: state.modelName || 'AI' });
 
   const chat  = document.getElementById('chat');
   const wrap  = document.createElement('div');
-  wrap.className = `msg ${role}`;
+  wrap.className = 'msg ' + role;
 
   const meta   = document.createElement('div');
   meta.className = 'msg-meta';
@@ -996,9 +1493,9 @@ function showTyping() {
   const el   = document.createElement('div');
   el.className = 'msg ai';
   el.id = 'typing';
-  el.innerHTML = `
-    <div class="msg-meta">${state.modelName || 'AI'}</div>
-    <div class="typing-indicator"><span></span><span></span><span></span></div>`;
+  el.innerHTML =
+    '<div class="msg-meta">' + (state.modelName || 'AI') + '</div>' +
+    '<div class="typing-indicator"><span></span><span></span><span></span></div>';
   chat.appendChild(el);
   chat.scrollTop = chat.scrollHeight;
 }
@@ -1026,12 +1523,12 @@ async function send() {
   showTyping();
 
   try {
-    const res  = await fetch(`${API}/api/chat`, {
+    const res  = await fetch(API + '/api/chat', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         project:       state.project,
-        question,
+        question:      question,
         provider:      state.provider,
         model:         state.model,
         history:       state.history,
@@ -1043,28 +1540,26 @@ async function send() {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
-      appendMsg('ai', `${t('error')}: ${err.detail || res.statusText}`);
+      appendMsg('ai', t('error') + ': ' + (err.detail || res.statusText));
       saveCurrentChat();
+      renderTabs();
     } else {
       const data   = await res.json();
       const answer = data.answer;
       appendMsg('ai', answer);
 
-      // update history (text only for context)
       state.history.push({ role: 'user',      content: question });
       state.history.push({ role: 'assistant', content: answer });
-
-      // keep history manageable
       if (state.history.length > 40) state.history = state.history.slice(-40);
 
-
-      // persist chat for this project
       saveCurrentChat();
+      renderTabs();
     }
   } catch (e) {
     removeTyping();
-    appendMsg('ai', `${t('networkError')}: ${e.message}`);
+    appendMsg('ai', t('networkError') + ': ' + e.message);
     saveCurrentChat();
+    renderTabs();
   }
 
   document.getElementById('send-btn').disabled = false;
@@ -1083,12 +1578,30 @@ document.getElementById('question').addEventListener('input', function() {
 });
 
 // ── init ──────────────────────────────────────────────────────────────────────
-applyLang();
-loadModels();
-loadProjects();
+renderUserPicker();
 
-// restore last chat from localStorage on page load
-restoreChat(state.project);
+// migrate old unscoped store to Jarek
+try {
+  const oldRaw = localStorage.getItem('docai-chats');
+  if (oldRaw && !localStorage.getItem('docai-chats-Jarek')) {
+    localStorage.setItem('docai-chats-Jarek', oldRaw);
+    localStorage.removeItem('docai-chats');
+  }
+} catch {}
+
+if (currentUser) {
+  document.getElementById('user-overlay').classList.add('hidden');
+  loadUserData();
+  updateUserUI();
+  applyLang();
+  loadModels();
+  loadProjects();
+  restoreChat(state.project);
+} else {
+  applyLang();
+  loadModels();
+  loadProjects();
+}
 </script>
 </body>
 </html>
