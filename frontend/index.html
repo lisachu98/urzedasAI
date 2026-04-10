@@ -134,11 +134,23 @@
   .project-list::-webkit-scrollbar { width: 4px; }
   .project-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-  .proj-btn {
+  .no-proj {
+    color: var(--muted);
+    font-size: 11px;
+    padding: 8px 12px;
+    font-style: italic;
+  }
+
+  /* folder tree */
+  .tree-node {
+    display: flex;
+    flex-direction: column;
+  }
+  .tree-row {
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 8px 12px;
+    gap: 4px;
+    padding: 6px 8px;
     border-radius: var(--radius);
     border: 1px solid transparent;
     background: transparent;
@@ -151,21 +163,44 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    user-select: none;
   }
-  .proj-btn:hover { color: var(--text); background: var(--border); }
-  .proj-btn.active {
+  .tree-row:hover { color: var(--text); background: var(--border); }
+  .tree-row.active {
     color: var(--accent);
     border-color: rgba(232,197,71,.2);
     background: rgba(232,197,71,.05);
   }
-  .proj-btn svg { flex-shrink: 0; opacity: .6; }
-  .proj-btn.active svg { opacity: 1; }
-
-  .no-proj {
+  .tree-chevron {
+    width: 14px; height: 14px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform .15s;
+    opacity: .5;
+  }
+  .tree-chevron.open { transform: rotate(90deg); }
+  .tree-chevron.empty { visibility: hidden; }
+  .tree-row svg.folder-icon { flex-shrink: 0; opacity: .6; }
+  .tree-row.active svg.folder-icon { opacity: 1; }
+  .tree-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .tree-badge {
+    font-size: 9px;
     color: var(--muted);
-    font-size: 11px;
-    padding: 8px 12px;
+    background: rgba(255,255,255,.04);
+    padding: 1px 5px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    opacity: .6;
+  }
+  .tree-children {
+    display: none;
+    flex-direction: column;
+  }
+  .tree-children.open { display: flex; }
+  .tree-loading {
+    color: var(--muted);
+    font-size: 10px;
     font-style: italic;
+    padding: 4px 8px;
   }
 
   .clear-proj {
@@ -549,6 +584,7 @@ const I18N = {
     noModels:         'Brak dostępnych modeli — sprawdź klucze API',
     failedProjects:   'Nie udało się załadować projektów',
     noFolders:        'Nie znaleziono folderów w /docs',
+    filesLabel:       'plików',
     context:          'Kontekst',
     noModel:          'Brak modelu',
     projectLoaded:    'Projekt <strong style="color:var(--accent)">%s</strong> załadowany. Zadaj dowolne pytanie.',
@@ -577,6 +613,7 @@ const I18N = {
     noModels:         'No models available — check API keys',
     failedProjects:   'Could not load projects',
     noFolders:        'No folders found in /docs',
+    filesLabel:       'files',
     context:          'Context',
     noModel:          'No model',
     projectLoaded:    'Project <strong style="color:var(--accent)">%s</strong> loaded. Ask anything about it.',
@@ -677,51 +714,118 @@ function renderModels(data) {
   });
 }
 
-// ── project list ──────────────────────────────────────────────────────────────
+// ── project tree browser ──────────────────────────────────────────────────────
 async function loadProjects() {
+  const el = document.getElementById('project-list');
+  el.innerHTML = `<div class="no-proj">${t('loadingProjects')}</div>`;
   try {
-    const res  = await fetch(`${API}/api/projects`);
+    const res = await fetch(`${API}/api/browse?path=`);
     const data = await res.json();
-    renderProjects(data.projects);
+    renderTree(data.children, el, 0);
   } catch {
-    document.getElementById('project-list').innerHTML =
-      `<div class="no-proj">${t('failedProjects')}</div>`;
+    el.innerHTML = `<div class="no-proj">${t('failedProjects')}</div>`;
   }
 }
 
-function renderProjects(projects) {
-  const el = document.getElementById('project-list');
-  if (!projects.length) {
-    el.innerHTML = `<div class="no-proj">${t('noFolders')}</div>`;
+const FOLDER_SVG = `<svg class="folder-icon" width="13" height="13" viewBox="0 0 13 13" fill="none">
+  <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.086a1.5 1.5 0 0 1 1.06.44l.415.414A1.5 1.5 0 0 0 7.12 3.5H10.5A1.5 1.5 0 0 1 12 5v5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 1 10V3.5Z"
+    stroke="currentColor" stroke-width="1.2"/>
+</svg>`;
+
+const CHEVRON_SVG = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+  <path d="M3.5 2l3.5 3-3.5 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+function renderTree(children, parentEl, depth) {
+  if (!children || !children.length) {
+    if (depth === 0) {
+      parentEl.innerHTML = `<div class="no-proj">${t('noFolders')}</div>`;
+    }
     return;
   }
-  el.innerHTML = projects.map(p => `
-    <button class="proj-btn" data-project="${p}">
-      <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-        <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.086a1.5 1.5 0 0 1 1.06.44l.415.414A1.5 1.5 0 0 0 7.12 3.5H10.5A1.5 1.5 0 0 1 12 5v5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 1 10V3.5Z"
-          stroke="currentColor" stroke-width="1.2"/>
-      </svg>
-      ${p}
-    </button>`).join('');
+  if (depth === 0) parentEl.innerHTML = '';
 
-  el.querySelectorAll('.proj-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      state.project = btn.dataset.project;
+  for (const item of children) {
+    const node = document.createElement('div');
+    node.className = 'tree-node';
+
+    const row = document.createElement('button');
+    row.className = 'tree-row';
+    row.style.paddingLeft = (8 + depth * 16) + 'px';
+    row.dataset.path = item.path;
+
+    const chevron = document.createElement('span');
+    chevron.className = 'tree-chevron' + (item.has_children ? '' : ' empty');
+    chevron.innerHTML = CHEVRON_SVG;
+
+    const name = document.createElement('span');
+    name.className = 'tree-name';
+    name.textContent = item.name;
+
+    row.innerHTML = '';
+    row.appendChild(chevron);
+    row.insertAdjacentHTML('beforeend', FOLDER_SVG);
+    row.appendChild(name);
+
+    if (item.file_count > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'tree-badge';
+      badge.textContent = `${item.file_count}`;
+      row.appendChild(badge);
+    }
+
+    const childContainer = document.createElement('div');
+    childContainer.className = 'tree-children';
+
+    node.appendChild(row);
+    node.appendChild(childContainer);
+    parentEl.appendChild(node);
+
+    // click handler
+    row.addEventListener('click', async () => {
+      // select this folder as active project
+      document.querySelectorAll('.tree-row').forEach(r => r.classList.remove('active'));
+      row.classList.add('active');
+      state.project = item.path;
       state.history = [];
-      document.querySelectorAll('.proj-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
       document.getElementById('clear-proj-btn').style.opacity = '.6';
       updateHeader();
       clearChat();
+
+      // toggle expand/collapse if has children
+      if (item.has_children) {
+        const isOpen = childContainer.classList.contains('open');
+        if (isOpen) {
+          childContainer.classList.remove('open');
+          chevron.classList.remove('open');
+        } else {
+          chevron.classList.add('open');
+          // load children if not yet loaded
+          if (!childContainer.dataset.loaded) {
+            childContainer.innerHTML = `<div class="tree-loading" style="padding-left:${8 + (depth+1)*16}px">…</div>`;
+            childContainer.classList.add('open');
+            try {
+              const res = await fetch(`${API}/api/browse?path=${encodeURIComponent(item.path)}`);
+              const data = await res.json();
+              childContainer.innerHTML = '';
+              renderTree(data.children, childContainer, depth + 1);
+              childContainer.dataset.loaded = '1';
+            } catch {
+              childContainer.innerHTML = '';
+            }
+          }
+          childContainer.classList.add('open');
+        }
+      }
     });
-  });
+  }
 }
 
 // ── sidebar buttons ───────────────────────────────────────────────────────────
 document.getElementById('clear-proj-btn').addEventListener('click', () => {
   state.project = null;
   state.history = [];
-  document.querySelectorAll('.proj-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tree-row').forEach(b => b.classList.remove('active'));
   document.getElementById('clear-proj-btn').style.opacity = '1';
   updateHeader();
   clearChat();
@@ -747,8 +851,9 @@ document.getElementById('lang-btn').addEventListener('click', () => {
 
 // ── header ────────────────────────────────────────────────────────────────────
 function updateHeader() {
+  const projName = state.project ? state.project.split('/').pop() : null;
   document.getElementById('header-title').textContent =
-    state.project ? state.project : t('generalChat');
+    projName ? projName : t('generalChat');
   document.getElementById('header-sub').innerHTML =
     state.project
       ? `${t('context')}: <span>${state.project}</span>`

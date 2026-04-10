@@ -157,6 +157,30 @@ def list_projects():
     return sorted([d.name for d in root.iterdir() if d.is_dir()])
 
 
+def browse_path(rel_path: str = ""):
+    """Return immediate subfolders for a given relative path under DOCS_ROOT."""
+    root = Path(DOCS_ROOT).resolve()
+    target = (root / rel_path).resolve() if rel_path else root
+    # path traversal guard
+    if not str(target).startswith(str(root)):
+        return []
+    if not target.exists() or not target.is_dir():
+        return []
+
+    children = []
+    for d in sorted(target.iterdir()):
+        if d.is_dir():
+            has_subfolders = any(sub.is_dir() for sub in d.iterdir() if sub.is_dir())
+            file_count = sum(1 for f in d.iterdir() if f.is_file())
+            children.append({
+                "name": d.name,
+                "path": str(d.relative_to(root)).replace("\\", "/"),
+                "has_children": has_subfolders,
+                "file_count": file_count,
+            })
+    return children
+
+
 def load_folder(folder_path: Path):
     """Return a list of content blocks (text or image/pdf) for all files in folder."""
     SUPPORTED_TEXT  = {".txt", ".md", ".csv", ".json", ".xml", ".html", ".py",
@@ -262,6 +286,13 @@ class ChatRequest(BaseModel):
 @app.get("/api/projects")
 def get_projects():
     return {"projects": list_projects()}
+
+
+@app.get("/api/browse")
+def browse_folder(path: str = ""):
+    """Return subfolders for a given relative path, enabling tree navigation."""
+    children = browse_path(path)
+    return {"path": path, "children": children}
 
 
 @app.get("/api/models")
