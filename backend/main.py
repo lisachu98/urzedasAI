@@ -363,7 +363,6 @@ class ChatRequest(BaseModel):
     model:          str  # actual model ID, e.g. "claude-sonnet-4-5"
     history:        Optional[list] = []
     web_search:     Optional[bool] = True
-    include_files:  Optional[bool] = True   # send project files (set False for follow-ups)
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -393,22 +392,38 @@ async def get_models():
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    log.info("Chat request: provider=%s model=%s project=%s include_files=%s history_len=%d",
-             req.provider, req.model, req.project, req.include_files, len(req.history or []))
+    log.info("Chat request: provider=%s model=%s project=%s history_len=%d",
+             req.provider, req.model, req.project, len(req.history or []))
 
-    # load project files only on first message (include_files=True)
+    # ── load project files ────────────────────────────────────────────────────
     context_blocks = []
-    if req.project and req.include_files:
+    if req.project:
         folder = (Path(DOCS_ROOT) / req.project).resolve()
-        # ── path traversal guard ──
         if not str(folder).startswith(str(Path(DOCS_ROOT).resolve())):
             raise HTTPException(status_code=400, detail="Invalid project path")
         if not folder.exists():
             raise HTTPException(status_code=404, detail="Project folder not found")
         context_blocks = await asyncio.to_thread(load_folder, folder)
 
-    # build user message
-    user_content = context_blocks + [{"type": "text", "text": req.question}]
+    # ── build conversation ────────────────────────────────────────────────────
+    # Mirrors how Claude/ChatGPT web works:
+    #   • First message  → files + question together as the user message
+    #   • Follow-ups     → files injected into the *first* history user message,
+    #                       current message is text-only.
+    # Result: the AI sees files exactly once in the conversation.
+    history = list(req.history or [])
+
+    if history and context_blocks:
+        for i, h in enumerate(history):
+            if h["role"] == "user":
+                history[i] = {
+                    "role": "user",
+                    "content": context_blocks + [{"type": "text", "text": h["content"]}],
+                }
+                break
+        user_content = [{"type": "text", "text": req.question}]
+    else:
+        user_content = context_blocks + [{"type": "text", "text": req.question}]
 
     system_prompt = (
         "You are a helpful assistant with access to the user's project documents. "
@@ -417,127 +432,105 @@ async def chat(req: ChatRequest):
         "tone, structure, and language. Be precise and professional."
     )
 
+    # ── helpers: convert content (string or block-array) per provider ──────────
+    def _clean_anthropic(content):
+        if isinstance(content, list):
+            return [{k: v for k, v in b.items() if not k.startswith("_")} for b in content]
+        return content
+
+    def _to_oai(block):
+        if block["type"] == "text":
+            return {"type": "text", "text": block["text"]}
+        if block["type"] == "image":
+            src = block["source"]
+            return {"type": "image_url", "image_url": {"url": f"data:{src['media_type']};base64,{src['data']}"}}
+        if block["type"] == "document":
+            return {"type": "text", "text": f"--- FILE: {block.get('_filename','document.pdf')} ---\n{block.get('_pdf_text','[PDF]')}\n"}
+        return {"type": "text", "text": ""}
+
+    def _to_oai_resp(block):
+        if block["type"] == "text":
+            return {"type": "input_text", "text": block["text"]}
+        if block["type"] == "image":
+            src = block["source"]
+            return {"type": "input_image", "image_url": f"data:{src['media_type']};base64,{src['data']}"}
+        if block["type"] == "document":
+            return {"type": "input_text", "text": f"--- FILE: {block.get('_filename','document.pdf')} ---\n{block.get('_pdf_text','[PDF]')}\n"}
+        return {"type": "input_text", "text": ""}
+
+    def _oai_content(content, converter):
+        if isinstance(content, list):
+            return [converter(b) for b in content]
+        return content
+
+    def _gemini_parts(content):
+        if isinstance(content, str):
+            return [gtypes.Part.from_text(text=content)]
+        parts = []
+        for block in content:
+            if block["type"] == "text":
+                parts.append(gtypes.Part.from_text(text=block["text"]))
+            elif block["type"] == "image":
+                src = block["source"]
+                parts.append(gtypes.Part.from_bytes(data=base64.b64decode(src["data"]), mime_type=src["media_type"]))
+            elif block["type"] == "document":
+                parts.append(gtypes.Part.from_bytes(data=base64.b64decode(block["source"]["data"]), mime_type="application/pdf"))
+        return parts
+
     try:
         # ── Claude ───────────────────────────────────────────────────────────
         if req.provider == "anthropic":
             client = get_anthropic_client()
-            # Strip internal keys from blocks before sending to Anthropic
-            clean_content = []
-            for block in user_content:
-                b = {k: v for k, v in block.items() if not k.startswith("_")}
-                clean_content.append(b)
-            messages = (req.history or []) + [{"role": "user", "content": clean_content}]
+            messages = []
+            for h in history:
+                messages.append({"role": h["role"], "content": _clean_anthropic(h["content"])})
+            messages.append({"role": "user", "content": _clean_anthropic(user_content)})
             kwargs = dict(model=req.model, max_tokens=16000, system=system_prompt, messages=messages)
             if req.web_search:
                 kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
             response = await client.messages.create(**kwargs)
-            # Collect text from all content blocks (handles web search tool results too)
             text_parts = [b.text for b in response.content if hasattr(b, "text")]
             return {"answer": "\n\n".join(text_parts) if text_parts else "No response generated."}
 
         # ── GPT-4o ───────────────────────────────────────────────────────────
         elif req.provider == "openai":
             client = get_openai_client()
-
             if req.web_search:
-                # Use Responses API for built-in web search
-                def to_oai_resp(block):
-                    if block["type"] == "text":
-                        return {"type": "input_text", "text": block["text"]}
-                    if block["type"] == "image":
-                        src = block["source"]
-                        return {"type": "input_image", "image_url": f"data:{src['media_type']};base64,{src['data']}"}
-                    if block["type"] == "document":
-                        pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
-                        filename = block.get("_filename", "document.pdf")
-                        return {"type": "input_text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
-                    return {"type": "input_text", "text": ""}
-
-                resp_content = [to_oai_resp(b) for b in user_content]
-                messages = list(req.history or [])
-                messages.append({"role": "user", "content": resp_content})
+                messages = []
+                for h in history:
+                    messages.append({"role": h["role"], "content": _oai_content(h["content"], _to_oai_resp)})
+                messages.append({"role": "user", "content": [_to_oai_resp(b) for b in user_content]})
                 response = await client.responses.create(
-                    model=req.model,
-                    instructions=system_prompt,
-                    input=messages,
+                    model=req.model, instructions=system_prompt, input=messages,
                     tools=[{"type": "web_search_preview"}],
                 )
                 return {"answer": response.output_text}
 
-            # convert blocks to OpenAI Chat Completions format
-            def to_oai(block):
-                if block["type"] == "text":
-                    return {"type": "text", "text": block["text"]}
-                if block["type"] == "image":
-                    src = block["source"]
-                    return {"type": "image_url", "image_url": {
-                        "url": f"data:{src['media_type']};base64,{src['data']}"
-                    }}
-                if block["type"] == "document":
-                    pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
-                    filename = block.get("_filename", "document.pdf")
-                    return {"type": "text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
-                return {"type": "text", "text": ""}
-
-            oai_content = [to_oai(b) for b in user_content]
-            messages    = [{"role": "system", "content": system_prompt}]
-            for h in (req.history or []):
-                messages.append(h)
-            messages.append({"role": "user", "content": oai_content})
-
+            messages = [{"role": "system", "content": system_prompt}]
+            for h in history:
+                messages.append({"role": h["role"], "content": _oai_content(h["content"], _to_oai)})
+            messages.append({"role": "user", "content": [_to_oai(b) for b in user_content]})
             response = await client.chat.completions.create(model=req.model, messages=messages, max_tokens=16000)
             return {"answer": response.choices[0].message.content}
 
         # ── Gemini (sync SDK — run in thread) ────────────────────────────────
         elif req.provider == "gemini":
             client = get_gemini_client()
-
-            # Build parts for the current message
-            parts: list = []
-            for block in user_content:
-                if block["type"] == "text":
-                    parts.append(gtypes.Part.from_text(text=block["text"]))
-                elif block["type"] == "image":
-                    src = block["source"]
-                    parts.append(gtypes.Part.from_bytes(
-                        data=base64.b64decode(src["data"]),
-                        mime_type=src["media_type"],
-                    ))
-                elif block["type"] == "document":
-                    parts.append(gtypes.Part.from_bytes(
-                        data=base64.b64decode(block["source"]["data"]),
-                        mime_type="application/pdf",
-                    ))
-
             config = gtypes.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=16000,
+                system_instruction=system_prompt, max_output_tokens=16000,
                 tools=[gtypes.Tool(google_search=gtypes.GoogleSearch())] if req.web_search else None,
             )
-
-            # Build conversation history for Gemini
             gemini_history: list = []
-            for h in (req.history or []):
+            for h in history:
                 role = "user" if h["role"] == "user" else "model"
-                gemini_history.append(gtypes.Content(
-                    role=role,
-                    parts=[gtypes.Part.from_text(text=h["content"])],
-                ))
+                gemini_history.append(gtypes.Content(role=role, parts=_gemini_parts(h["content"])))
+            current_parts = _gemini_parts(user_content)
 
             def _gemini_call():
                 if gemini_history:
-                    chat_session = client.chats.create(
-                        model=req.model,
-                        config=config,
-                        history=gemini_history,
-                    )
-                    return chat_session.send_message(parts)
-                else:
-                    return client.models.generate_content(
-                        model=req.model,
-                        contents=parts,
-                        config=config,
-                    )
+                    session = client.chats.create(model=req.model, config=config, history=gemini_history)
+                    return session.send_message(current_parts)
+                return client.models.generate_content(model=req.model, contents=current_parts, config=config)
 
             response = await asyncio.to_thread(_gemini_call)
             return {"answer": response.text}
@@ -545,28 +538,10 @@ async def chat(req: ChatRequest):
         # ── xAI (Grok) ──────────────────────────────────────────────────────
         elif req.provider == "xai":
             client = get_xai_client()
-
-            # xAI uses OpenAI-compatible format
-            def to_xai(block):
-                if block["type"] == "text":
-                    return {"type": "text", "text": block["text"]}
-                if block["type"] == "image":
-                    src = block["source"]
-                    return {"type": "image_url", "image_url": {
-                        "url": f"data:{src['media_type']};base64,{src['data']}"
-                    }}
-                if block["type"] == "document":
-                    pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
-                    filename = block.get("_filename", "document.pdf")
-                    return {"type": "text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
-                return {"type": "text", "text": ""}
-
-            xai_content = [to_xai(b) for b in user_content]
-            messages    = [{"role": "system", "content": system_prompt}]
-            for h in (req.history or []):
-                messages.append(h)
-            messages.append({"role": "user", "content": xai_content})
-
+            messages = [{"role": "system", "content": system_prompt}]
+            for h in history:
+                messages.append({"role": h["role"], "content": _oai_content(h["content"], _to_oai)})
+            messages.append({"role": "user", "content": [_to_oai(b) for b in user_content]})
             kwargs = dict(model=req.model, messages=messages, max_tokens=16000)
             if req.web_search:
                 kwargs["extra_body"] = {"search_parameters": {"mode": "auto", "max_search_results": 5}}

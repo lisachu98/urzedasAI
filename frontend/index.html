@@ -640,7 +640,7 @@ let state = {
 };
 
 // ── per-project chat persistence ──────────────────────────────────────────────
-const chatStore = {};   // key → { history:[], messages:[], filesLoaded:bool }
+const chatStore = {};   // key → { history:[], messages:[] }
 
 function chatKey(proj) { return proj || '__general__'; }
 
@@ -649,7 +649,6 @@ function saveCurrentChat() {
   chatStore[key] = {
     history:     state.history.slice(),
     messages:    state.messages.slice(),
-    filesLoaded: chatStore[key]?.filesLoaded || false,
   };
 }
 
@@ -1004,10 +1003,6 @@ async function send() {
   appendMsg('user', question);
   showTyping();
 
-  // Send files if this project hasn't had them loaded yet
-  const key = chatKey(state.project);
-  const needFiles = !chatStore[key]?.filesLoaded;
-
   try {
     const res  = await fetch(`${API}/api/chat`, {
       method:  'POST',
@@ -1019,7 +1014,6 @@ async function send() {
         model:         state.model,
         history:       state.history,
         web_search:    state.webSearch,
-        include_files: needFiles,
       }),
     });
 
@@ -1041,9 +1035,6 @@ async function send() {
       // keep history manageable
       if (state.history.length > 40) state.history = state.history.slice(-40);
 
-      // mark files as loaded for this project
-      if (!chatStore[key]) chatStore[key] = { history: [], messages: [], filesLoaded: false };
-      chatStore[key].filesLoaded = true;
 
       // persist chat for this project
       saveCurrentChat();
