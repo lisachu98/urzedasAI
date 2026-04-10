@@ -23,7 +23,7 @@
     --gemini:   #4285F4;
     --xai:      #e4e4e7;
     --radius:   10px;
-    --fav:      #f43f5e;
+    --fav:      #c11cff;
   }
 
   body {
@@ -1442,6 +1442,19 @@ document.getElementById('lang-btn').addEventListener('click', () => {
 });
 
 // ── header ────────────────────────────────────────────────────────────────────
+const PROVIDER_ACCENT = {
+  anthropic: '#D97706',
+  openai:    '#10A37F',
+  gemini:    '#4285F4',
+  xai:       '#e4e4e7',
+};
+const DEFAULT_ACCENT = '#c11cff';
+
+function updateAccentColor() {
+  const color = PROVIDER_ACCENT[state.provider] || DEFAULT_ACCENT;
+  document.documentElement.style.setProperty('--accent', color);
+}
+
 function updateHeader() {
   const projName = state.project ? state.project.split('/').pop() : null;
   document.getElementById('header-title').textContent =
@@ -1453,6 +1466,7 @@ function updateHeader() {
   const badge = document.getElementById('model-badge');
   badge.textContent  = state.modelName || t('noModel');
   badge.className    = 'model-badge ' + (state.provider || '');
+  updateAccentColor();
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
