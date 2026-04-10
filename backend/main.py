@@ -175,6 +175,28 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
     return "\n".join(text_parts) if text_parts else "[PDF contained no extractable text]"
 
 
+def render_pdf_pages_as_images(pdf_bytes: bytes, max_pages: int = 20, dpi: int = 150) -> list[dict]:
+    """Render PDF pages as base64 PNG images for models that can't read raw PDFs."""
+    images = []
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        for page_num, page in enumerate(doc):
+            if page_num >= max_pages:
+                log.info("PDF page rendering capped at %d pages", max_pages)
+                break
+            mat = fitz.Matrix(dpi / 72, dpi / 72)
+            pix = page.get_pixmap(matrix=mat)
+            png_data = base64.standard_b64encode(pix.tobytes("png")).decode()
+            images.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": png_data},
+            })
+        doc.close()
+    except Exception as e:
+        log.warning("PDF page rendering failed: %s", e)
+    return images
+
+
 def list_projects():
     root = Path(DOCS_ROOT)
     if not root.exists():
@@ -445,7 +467,22 @@ async def chat(req: ChatRequest):
             src = block["source"]
             return {"type": "image_url", "image_url": {"url": f"data:{src['media_type']};base64,{src['data']}"}}
         if block["type"] == "document":
-            return {"type": "text", "text": f"--- FILE: {block.get('_filename','document.pdf')} ---\n{block.get('_pdf_text','[PDF]')}\n"}
+            # GPT can't read raw PDFs — render pages as images + include extracted text
+            result_blocks = []
+            pdf_text = block.get("_pdf_text", "")
+            filename = block.get("_filename", "document.pdf")
+            if pdf_text and "[PDF contained no extractable text]" not in pdf_text:
+                result_blocks.append({"type": "text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"})
+            # Render pages as images so GPT can visually read the PDF
+            raw_data = block.get("source", {}).get("data", "")
+            if raw_data:
+                page_images = render_pdf_pages_as_images(base64.b64decode(raw_data))
+                for img in page_images:
+                    src = img["source"]
+                    result_blocks.append({"type": "image_url", "image_url": {"url": f"data:{src['media_type']};base64,{src['data']}"}})
+            if not result_blocks:
+                result_blocks.append({"type": "text", "text": f"--- FILE: {filename} ---\n[Could not process PDF]\n"})
+            return result_blocks  # returns a LIST — caller must flatten
         return {"type": "text", "text": ""}
 
     def _to_oai_resp(block):
@@ -455,12 +492,33 @@ async def chat(req: ChatRequest):
             src = block["source"]
             return {"type": "input_image", "image_url": f"data:{src['media_type']};base64,{src['data']}"}
         if block["type"] == "document":
-            return {"type": "input_text", "text": f"--- FILE: {block.get('_filename','document.pdf')} ---\n{block.get('_pdf_text','[PDF]')}\n"}
+            # GPT can't read raw PDFs — render pages as images + include extracted text
+            result_blocks = []
+            pdf_text = block.get("_pdf_text", "")
+            filename = block.get("_filename", "document.pdf")
+            if pdf_text and "[PDF contained no extractable text]" not in pdf_text:
+                result_blocks.append({"type": "input_text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"})
+            raw_data = block.get("source", {}).get("data", "")
+            if raw_data:
+                page_images = render_pdf_pages_as_images(base64.b64decode(raw_data))
+                for img in page_images:
+                    src = img["source"]
+                    result_blocks.append({"type": "input_image", "image_url": f"data:{src['media_type']};base64,{src['data']}"})
+            if not result_blocks:
+                result_blocks.append({"type": "input_text", "text": f"--- FILE: {filename} ---\n[Could not process PDF]\n"})
+            return result_blocks  # returns a LIST — caller must flatten
         return {"type": "input_text", "text": ""}
 
     def _oai_content(content, converter):
         if isinstance(content, list):
-            return [converter(b) for b in content]
+            result = []
+            for b in content:
+                converted = converter(b)
+                if isinstance(converted, list):
+                    result.extend(converted)  # flatten document → multiple blocks
+                else:
+                    result.append(converted)
+            return result
         return content
 
     def _gemini_parts(content):
@@ -499,7 +557,7 @@ async def chat(req: ChatRequest):
                 messages = []
                 for h in history:
                     messages.append({"role": h["role"], "content": _oai_content(h["content"], _to_oai_resp)})
-                messages.append({"role": "user", "content": [_to_oai_resp(b) for b in user_content]})
+                messages.append({"role": "user", "content": _oai_content(user_content, _to_oai_resp)})
                 response = await client.responses.create(
                     model=req.model, instructions=system_prompt, input=messages,
                     tools=[{"type": "web_search_preview"}],
@@ -509,7 +567,7 @@ async def chat(req: ChatRequest):
             messages = [{"role": "system", "content": system_prompt}]
             for h in history:
                 messages.append({"role": h["role"], "content": _oai_content(h["content"], _to_oai)})
-            messages.append({"role": "user", "content": [_to_oai(b) for b in user_content]})
+            messages.append({"role": "user", "content": _oai_content(user_content, _to_oai)})
             response = await client.chat.completions.create(model=req.model, messages=messages, max_tokens=16000)
             return {"answer": response.choices[0].message.content}
 

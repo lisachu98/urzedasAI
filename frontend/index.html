@@ -639,10 +639,30 @@ let state = {
   webSearch: true,
 };
 
-// ── per-project chat persistence ──────────────────────────────────────────────
-const chatStore = {};   // key → { history:[], messages:[] }
+// ── per-project chat persistence (survives refresh via localStorage) ─────────
+const STORE_KEY = 'docai-chats';
+
+// Load from localStorage on startup
+let chatStore = {};
+try {
+  const raw = localStorage.getItem(STORE_KEY);
+  if (raw) chatStore = JSON.parse(raw);
+} catch { chatStore = {}; }
 
 function chatKey(proj) { return proj || '__general__'; }
+
+function _persistStore() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(chatStore));
+  } catch (e) {
+    // localStorage full — trim oldest chats
+    const keys = Object.keys(chatStore);
+    if (keys.length > 1) {
+      delete chatStore[keys[0]];
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(chatStore)); } catch {}
+    }
+  }
+}
 
 function saveCurrentChat() {
   const key = chatKey(state.project);
@@ -650,6 +670,7 @@ function saveCurrentChat() {
     history:     state.history.slice(),
     messages:    state.messages.slice(),
   };
+  _persistStore();
 }
 
 function restoreChat(proj) {
@@ -905,6 +926,7 @@ document.getElementById('new-chat-btn').addEventListener('click', () => {
   state.history  = [];
   state.messages = [];
   delete chatStore[chatKey(state.project)];
+  _persistStore();
   showEmptyState();
 });
 
@@ -1064,6 +1086,9 @@ document.getElementById('question').addEventListener('input', function() {
 applyLang();
 loadModels();
 loadProjects();
+
+// restore last chat from localStorage on page load
+restoreChat(state.project);
 </script>
 </body>
 </html>
