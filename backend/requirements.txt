@@ -5,5 +5,6 @@ openai
 google-genai
 python-docx
 openpyxl
+xlrd
 python-multipart
 pymupdf

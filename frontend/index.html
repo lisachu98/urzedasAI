@@ -635,8 +635,74 @@ let state = {
   modelName: null,
   project:   null,
   history:   [],
+  messages:  [],          // [{role:'user'|'ai', text, modelName}]
   webSearch: true,
 };
+
+// ── per-project chat persistence ──────────────────────────────────────────────
+const chatStore = {};   // key → { history:[], messages:[], filesLoaded:bool }
+
+function chatKey(proj) { return proj || '__general__'; }
+
+function saveCurrentChat() {
+  const key = chatKey(state.project);
+  chatStore[key] = {
+    history:     state.history.slice(),
+    messages:    state.messages.slice(),
+    filesLoaded: chatStore[key]?.filesLoaded || false,
+  };
+}
+
+function restoreChat(proj) {
+  const key = chatKey(proj);
+  const saved = chatStore[key];
+  if (saved && saved.messages.length) {
+    state.history  = saved.history.slice();
+    state.messages = saved.messages.slice();
+    rerenderMessages();
+  } else {
+    state.history  = [];
+    state.messages = [];
+    showEmptyState();
+  }
+}
+
+function rerenderMessages() {
+  const chat = document.getElementById('chat');
+  chat.innerHTML = '';
+  for (const m of state.messages) {
+    const wrap = document.createElement('div');
+    wrap.className = `msg ${m.role}`;
+
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = m.role === 'user' ? t('you') : (m.modelName || 'AI');
+
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    if (m.role === 'ai') {
+      bubble.innerHTML = DOMPurify.sanitize(marked.parse(m.text));
+    } else {
+      bubble.textContent = m.text;
+    }
+
+    wrap.appendChild(meta);
+    wrap.appendChild(bubble);
+    chat.appendChild(wrap);
+  }
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function showEmptyState() {
+  const chat = document.getElementById('chat');
+  chat.innerHTML = `
+    <div class="empty-state" id="empty-state">
+      <div class="icon">✦</div>
+      <p>${state.project
+        ? t('projectLoaded').replace('%s', state.project)
+        : t('selectProject')}</p>
+    </div>`;
+}
 
 // ── apply language to static UI elements ──────────────────────────────────────
 function applyLang() {
@@ -649,7 +715,8 @@ function applyLang() {
   document.getElementById('web-search-btn').title        = t('webSearchTitle');
   document.getElementById('lang-btn').textContent        = t('langSwitch');
   updateHeader();
-  clearChat();
+  if (state.messages.length) rerenderMessages();
+  else showEmptyState();
 }
 
 // ── model list ────────────────────────────────────────────────────────────────
@@ -783,14 +850,18 @@ function renderTree(children, parentEl, depth) {
 
     // click handler
     row.addEventListener('click', async () => {
+      // save current chat before switching
+      saveCurrentChat();
+
       // select this folder as active project
       document.querySelectorAll('.tree-row').forEach(r => r.classList.remove('active'));
       row.classList.add('active');
       state.project = item.path;
-      state.history = [];
       document.getElementById('clear-proj-btn').style.opacity = '.6';
       updateHeader();
-      clearChat();
+
+      // restore chat for this project (or show empty state)
+      restoreChat(item.path);
 
       // toggle expand/collapse if has children
       if (item.has_children) {
@@ -823,17 +894,19 @@ function renderTree(children, parentEl, depth) {
 
 // ── sidebar buttons ───────────────────────────────────────────────────────────
 document.getElementById('clear-proj-btn').addEventListener('click', () => {
+  saveCurrentChat();
   state.project = null;
-  state.history = [];
   document.querySelectorAll('.tree-row').forEach(b => b.classList.remove('active'));
   document.getElementById('clear-proj-btn').style.opacity = '1';
   updateHeader();
-  clearChat();
+  restoreChat(null);
 });
 
 document.getElementById('new-chat-btn').addEventListener('click', () => {
-  state.history = [];
-  clearChat();
+  state.history  = [];
+  state.messages = [];
+  delete chatStore[chatKey(state.project)];
+  showEmptyState();
 });
 
 // web search toggle
@@ -864,20 +937,12 @@ function updateHeader() {
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
-function clearChat() {
-  const chat = document.getElementById('chat');
-  chat.innerHTML = `
-    <div class="empty-state" id="empty-state">
-      <div class="icon">✦</div>
-      <p>${state.project
-        ? t('projectLoaded').replace('%s', state.project)
-        : t('selectProject')}</p>
-    </div>`;
-}
-
 function appendMsg(role, text) {
   const empty = document.getElementById('empty-state');
   if (empty) empty.remove();
+
+  // track for persistence
+  state.messages.push({ role, text, modelName: state.modelName || 'AI' });
 
   const chat  = document.getElementById('chat');
   const wrap  = document.createElement('div');
@@ -891,7 +956,6 @@ function appendMsg(role, text) {
   bubble.className = 'msg-bubble';
 
   if (role === 'ai') {
-    // Render markdown for AI responses
     bubble.innerHTML = DOMPurify.sanitize(marked.parse(text));
   } else {
     bubble.textContent = text;
@@ -940,17 +1004,22 @@ async function send() {
   appendMsg('user', question);
   showTyping();
 
+  // Send files if this project hasn't had them loaded yet
+  const key = chatKey(state.project);
+  const needFiles = !chatStore[key]?.filesLoaded;
+
   try {
     const res  = await fetch(`${API}/api/chat`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        project:    state.project,
+        project:       state.project,
         question,
-        provider:   state.provider,
-        model:      state.model,
-        history:    state.history,
-        web_search: state.webSearch,
+        provider:      state.provider,
+        model:         state.model,
+        history:       state.history,
+        web_search:    state.webSearch,
+        include_files: needFiles,
       }),
     });
 
@@ -959,6 +1028,7 @@ async function send() {
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
       appendMsg('ai', `${t('error')}: ${err.detail || res.statusText}`);
+      saveCurrentChat();
     } else {
       const data   = await res.json();
       const answer = data.answer;
@@ -969,11 +1039,19 @@ async function send() {
       state.history.push({ role: 'assistant', content: answer });
 
       // keep history manageable
-      if (state.history.length > 20) state.history = state.history.slice(-20);
+      if (state.history.length > 40) state.history = state.history.slice(-40);
+
+      // mark files as loaded for this project
+      if (!chatStore[key]) chatStore[key] = { history: [], messages: [], filesLoaded: false };
+      chatStore[key].filesLoaded = true;
+
+      // persist chat for this project
+      saveCurrentChat();
     }
   } catch (e) {
     removeTyping();
     appendMsg('ai', `${t('networkError')}: ${e.message}`);
+    saveCurrentChat();
   }
 
   document.getElementById('send-btn').disabled = false;

@@ -1,6 +1,8 @@
 import os
 import base64
 import mimetypes
+import logging
+import asyncio
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +18,14 @@ import re
 import time
 from functools import lru_cache
 
+# ── logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("docai")
+
 app = FastAPI()
 
 app.add_middleware(
@@ -26,22 +36,24 @@ app.add_middleware(
 )
 
 DOCS_ROOT = os.environ.get("DOCS_ROOT", "/docs")
+MAX_FILE_SIZE = 50 * 1024 * 1024    # 50 MB per file
+MAX_TOTAL_SIZE = 200 * 1024 * 1024  # 200 MB total context
 
-# ── singleton API clients ────────────────────────────────────────────────────
+# ── singleton API clients (async) ────────────────────────────────────────────
 
 @lru_cache(maxsize=1)
-def get_anthropic_client() -> anthropic.Anthropic:
+def get_anthropic_client() -> anthropic.AsyncAnthropic:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
-    return anthropic.Anthropic(api_key=api_key)
+    return anthropic.AsyncAnthropic(api_key=api_key)
 
 @lru_cache(maxsize=1)
-def get_openai_client() -> openai.OpenAI:
+def get_openai_client() -> openai.AsyncOpenAI:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
-    return openai.OpenAI(api_key=api_key)
+    return openai.AsyncOpenAI(api_key=api_key)
 
 @lru_cache(maxsize=1)
 def get_gemini_client() -> genai.Client:
@@ -51,11 +63,11 @@ def get_gemini_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 @lru_cache(maxsize=1)
-def get_xai_client() -> openai.OpenAI:
+def get_xai_client() -> openai.AsyncOpenAI:
     api_key = os.environ.get("XAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="XAI_API_KEY not set")
-    return openai.OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+    return openai.AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
 
 # ── model listing (cached) ───────────────────────────────────────────────────
 
@@ -64,7 +76,7 @@ _CACHE_TTL = 3600  # 1 hour
 _OAI_DATED_RE = re.compile(r"\d{4,}")  # filters out dated snapshots like gpt-4o-2024-08-06
 
 
-def fetch_available_models() -> dict:
+async def fetch_available_models() -> dict:
     """Query each provider for available models. Results cached for 1 hour."""
     now = time.time()
     if _models_cache["data"] and (now - _models_cache["ts"]) < _CACHE_TTL:
@@ -75,19 +87,22 @@ def fetch_available_models() -> dict:
     # ── Anthropic ──
     try:
         client = get_anthropic_client()
-        page = client.models.list(limit=100)
+        page = await client.models.list(limit=100)
         result["anthropic"] = sorted(
             [{"id": m.id, "name": m.display_name} for m in page.data],
             key=lambda x: x["name"],
         )
-    except Exception:
+        log.info("Loaded %d Anthropic models", len(result["anthropic"]))
+    except Exception as e:
+        log.warning("Failed to load Anthropic models: %s", e)
         result["anthropic"] = []
 
     # ── OpenAI ──
     try:
         client = get_openai_client()
         oai: list[dict] = []
-        for m in client.models.list().data:
+        oai_page = await client.models.list()
+        for m in oai_page.data:
             mid = m.id
             # only chat-capable model families
             if not (mid.startswith("gpt-") or re.match(r"^o\d", mid) or mid.startswith("chatgpt")):
@@ -100,33 +115,42 @@ def fetch_available_models() -> dict:
                 continue
             oai.append({"id": mid, "name": mid})
         result["openai"] = sorted(oai, key=lambda x: x["name"])
-    except Exception:
+        log.info("Loaded %d OpenAI models", len(result["openai"]))
+    except Exception as e:
+        log.warning("Failed to load OpenAI models: %s", e)
         result["openai"] = []
 
-    # ── Gemini ──
+    # ── Gemini (sync SDK — run in thread) ──
     try:
         client = get_gemini_client()
-        gem: list[dict] = []
-        for m in client.models.list():
-            model_id = m.name.replace("models/", "") if m.name else ""
-            if not model_id.startswith("gemini"):
-                continue
-            gem.append({"id": model_id, "name": m.display_name or model_id})
-        result["gemini"] = sorted(gem, key=lambda x: x["name"])
-    except Exception:
+        def _list_gemini():
+            gem: list[dict] = []
+            for m in client.models.list():
+                model_id = m.name.replace("models/", "") if m.name else ""
+                if not model_id.startswith("gemini"):
+                    continue
+                gem.append({"id": model_id, "name": m.display_name or model_id})
+            return sorted(gem, key=lambda x: x["name"])
+        result["gemini"] = await asyncio.to_thread(_list_gemini)
+        log.info("Loaded %d Gemini models", len(result["gemini"]))
+    except Exception as e:
+        log.warning("Failed to load Gemini models: %s", e)
         result["gemini"] = []
 
     # ── xAI ──
     try:
         client = get_xai_client()
+        xai_page = await client.models.list()
         xai_models: list[dict] = []
-        for m in client.models.list().data:
+        for m in xai_page.data:
             mid = m.id
             if not mid.startswith("grok"):
                 continue
             xai_models.append({"id": mid, "name": mid})
         result["xai"] = sorted(xai_models, key=lambda x: x["name"])
-    except Exception:
+        log.info("Loaded %d xAI models", len(result["xai"]))
+    except Exception as e:
+        log.warning("Failed to load xAI models: %s", e)
         result["xai"] = []
 
     _models_cache["data"] = result
@@ -145,7 +169,8 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
             if page_text.strip():
                 text_parts.append(f"[Page {page_num}]\n{page_text}")
         doc.close()
-    except Exception:
+    except Exception as e:
+        log.warning("PDF text extraction failed: %s", e)
         return "[Could not extract text from PDF]"
     return "\n".join(text_parts) if text_parts else "[PDF contained no extractable text]"
 
@@ -170,7 +195,7 @@ def browse_path(rel_path: str = ""):
     children = []
     for d in sorted(target.iterdir()):
         if d.is_dir():
-            has_subfolders = any(sub.is_dir() for sub in d.iterdir() if sub.is_dir())
+            has_subfolders = any(sub.is_dir() for sub in d.iterdir())
             file_count = sum(1 for f in d.iterdir() if f.is_file())
             children.append({
                 "name": d.name,
@@ -181,6 +206,26 @@ def browse_path(rel_path: str = ""):
     return children
 
 
+# ── check optional dependencies once at import time ──────────────────────────
+try:
+    import docx as _docx
+    HAS_DOCX = True
+except ImportError:
+    HAS_DOCX = False
+
+try:
+    import openpyxl as _openpyxl
+    HAS_XLSX = True
+except ImportError:
+    HAS_XLSX = False
+
+try:
+    import xlrd as _xlrd
+    HAS_XLS = True
+except ImportError:
+    HAS_XLS = False
+
+
 def load_folder(folder_path: Path):
     """Return a list of content blocks (text or image/pdf) for all files in folder."""
     SUPPORTED_TEXT  = {".txt", ".md", ".csv", ".json", ".xml", ".html", ".py",
@@ -188,33 +233,38 @@ def load_folder(folder_path: Path):
     SUPPORTED_IMAGE = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
     SUPPORTED_DIRECT = {".pdf"}
 
-    # docx / xlsx need extraction
-    try:
-        import docx as _docx
-        HAS_DOCX = True
-    except ImportError:
-        HAS_DOCX = False
-    try:
-        import openpyxl as _openpyxl
-        HAS_XLSX = True
-    except ImportError:
-        HAS_XLSX = False
-
     blocks = []
+    total_size = 0
     files  = sorted(folder_path.rglob("*"))
 
     for f in files:
         if not f.is_file():
             continue
+
+        # ── safety: skip files that are too large ──
+        try:
+            fsize = f.stat().st_size
+        except OSError:
+            continue
+        if fsize > MAX_FILE_SIZE:
+            log.warning("Skipping %s — exceeds %d MB limit", f.name, MAX_FILE_SIZE // (1024 * 1024))
+            continue
+        if total_size + fsize > MAX_TOTAL_SIZE:
+            log.warning("Stopping file loading — total context exceeds %d MB", MAX_TOTAL_SIZE // (1024 * 1024))
+            break
+        total_size += fsize
+
         ext = f.suffix.lower()
+        # show path relative to the project folder for clarity
+        rel_name = str(f.relative_to(folder_path)).replace("\\", "/")
 
         # ── plain text ──
         if ext in SUPPORTED_TEXT:
             try:
                 content = f.read_text(encoding="utf-8", errors="ignore")
-                blocks.append({"type": "text", "text": f"--- FILE: {f.name} ---\n{content}\n"})
-            except Exception:
-                pass
+                blocks.append({"type": "text", "text": f"--- FILE: {rel_name} ---\n{content}\n"})
+            except Exception as e:
+                log.warning("Failed to read text file %s: %s", rel_name, e)
 
         # ── images ──
         elif ext in SUPPORTED_IMAGE:
@@ -223,9 +273,9 @@ def load_folder(folder_path: Path):
                 mime, _ = mimetypes.guess_type(str(f))
                 mime    = mime or "image/jpeg"
                 blocks.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}})
-                blocks.append({"type": "text", "text": f"(image above: {f.name})\n"})
-            except Exception:
-                pass
+                blocks.append({"type": "text", "text": f"(image above: {rel_name})\n"})
+            except Exception as e:
+                log.warning("Failed to read image %s: %s", rel_name, e)
 
         # ── PDF ──
         elif ext in SUPPORTED_DIRECT:
@@ -236,24 +286,42 @@ def load_folder(folder_path: Path):
                     "type": "document",
                     "source": {"type": "base64", "media_type": "application/pdf", "data": data},
                     "_pdf_text": extract_pdf_text(raw),   # pre-extract for models that need it
-                    "_filename": f.name,
+                    "_filename": rel_name,
                 })
-                blocks.append({"type": "text", "text": f"(document above: {f.name})\n"})
-            except Exception:
-                pass
+                blocks.append({"type": "text", "text": f"(document above: {rel_name})\n"})
+            except Exception as e:
+                log.warning("Failed to read PDF %s: %s", rel_name, e)
 
-        # ── Word ──
+        # ── Word (.docx) — paragraphs + tables ──
         elif ext == ".docx" and HAS_DOCX:
             try:
                 import docx
                 doc  = docx.Document(str(f))
-                text = "\n".join(p.text for p in doc.paragraphs)
-                blocks.append({"type": "text", "text": f"--- FILE: {f.name} ---\n{text}\n"})
-            except Exception:
-                pass
+                parts = []
+                for element in doc.element.body:
+                    # paragraphs
+                    if element.tag.endswith('}p'):
+                        for para in doc.paragraphs:
+                            if para._element is element:
+                                if para.text.strip():
+                                    parts.append(para.text)
+                                break
+                    # tables
+                    elif element.tag.endswith('}tbl'):
+                        for table in doc.tables:
+                            if table._element is element:
+                                rows_text = []
+                                for row in table.rows:
+                                    cells = [cell.text.strip() for cell in row.cells]
+                                    rows_text.append("\t".join(cells))
+                                parts.append("\n".join(rows_text))
+                                break
+                blocks.append({"type": "text", "text": f"--- FILE: {rel_name} ---\n" + "\n".join(parts) + "\n"})
+            except Exception as e:
+                log.warning("Failed to read Word file %s: %s", rel_name, e)
 
-        # ── Excel ──
-        elif ext in (".xlsx", ".xls") and HAS_XLSX:
+        # ── Excel (.xlsx) ──
+        elif ext == ".xlsx" and HAS_XLSX:
             try:
                 import openpyxl
                 wb   = openpyxl.load_workbook(str(f), data_only=True)
@@ -263,55 +331,81 @@ def load_folder(folder_path: Path):
                     text += f"[Sheet: {sheet}]\n"
                     for row in ws.iter_rows(values_only=True):
                         text += "\t".join(str(c) if c is not None else "" for c in row) + "\n"
-                blocks.append({"type": "text", "text": f"--- FILE: {f.name} ---\n{text}\n"})
-            except Exception:
-                pass
+                blocks.append({"type": "text", "text": f"--- FILE: {rel_name} ---\n{text}\n"})
+            except Exception as e:
+                log.warning("Failed to read Excel (.xlsx) file %s: %s", rel_name, e)
 
+        # ── Legacy Excel (.xls) ──
+        elif ext == ".xls" and HAS_XLS:
+            try:
+                import xlrd
+                wb   = xlrd.open_workbook(str(f))
+                text = ""
+                for sheet in wb.sheet_names():
+                    ws   = wb.sheet_by_name(sheet)
+                    text += f"[Sheet: {sheet}]\n"
+                    for rx in range(ws.nrows):
+                        text += "\t".join(str(c) for c in ws.row_values(rx)) + "\n"
+                blocks.append({"type": "text", "text": f"--- FILE: {rel_name} ---\n{text}\n"})
+            except Exception as e:
+                log.warning("Failed to read Excel (.xls) file %s: %s", rel_name, e)
+
+    log.info("Loaded %d content blocks from %s (%.1f MB)", len(blocks), folder_path.name, total_size / (1024 * 1024))
     return blocks
 
 
 # ── request / response models ─────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    project:    Optional[str] = None
-    question:   str
-    provider:   str  # "anthropic" | "openai" | "gemini" | "xai"
-    model:      str  # actual model ID, e.g. "claude-sonnet-4-5"
-    history:    Optional[list] = []
-    web_search: Optional[bool] = True
+    project:       Optional[str] = None
+    question:       str
+    provider:       str  # "anthropic" | "openai" | "gemini" | "xai"
+    model:          str  # actual model ID, e.g. "claude-sonnet-4-5"
+    history:        Optional[list] = []
+    web_search:     Optional[bool] = True
+    include_files:  Optional[bool] = True   # send project files (set False for follow-ups)
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
 
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint for monitoring (Uptime Kuma, Docker healthcheck)."""
+    return {"status": "ok"}
+
+
 @app.get("/api/projects")
-def get_projects():
+async def get_projects():
     return {"projects": list_projects()}
 
 
 @app.get("/api/browse")
-def browse_folder(path: str = ""):
+async def browse_folder(path: str = ""):
     """Return subfolders for a given relative path, enabling tree navigation."""
     children = browse_path(path)
     return {"path": path, "children": children}
 
 
 @app.get("/api/models")
-def get_models():
-    return fetch_available_models()
+async def get_models():
+    return await fetch_available_models()
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
-    # load project files if one is selected
+async def chat(req: ChatRequest):
+    log.info("Chat request: provider=%s model=%s project=%s include_files=%s history_len=%d",
+             req.provider, req.model, req.project, req.include_files, len(req.history or []))
+
+    # load project files only on first message (include_files=True)
     context_blocks = []
-    if req.project:
+    if req.project and req.include_files:
         folder = (Path(DOCS_ROOT) / req.project).resolve()
         # ── path traversal guard ──
         if not str(folder).startswith(str(Path(DOCS_ROOT).resolve())):
             raise HTTPException(status_code=400, detail="Invalid project path")
         if not folder.exists():
             raise HTTPException(status_code=404, detail="Project folder not found")
-        context_blocks = load_folder(folder)
+        context_blocks = await asyncio.to_thread(load_folder, folder)
 
     # build user message
     user_content = context_blocks + [{"type": "text", "text": req.question}]
@@ -323,162 +417,170 @@ def chat(req: ChatRequest):
         "tone, structure, and language. Be precise and professional."
     )
 
-    # ── Claude ───────────────────────────────────────────────────────────────
-    if req.provider == "anthropic":
-        client = get_anthropic_client()
-        # Strip internal keys from blocks before sending to Anthropic
-        clean_content = []
-        for block in user_content:
-            b = {k: v for k, v in block.items() if not k.startswith("_")}
-            clean_content.append(b)
-        messages = (req.history or []) + [{"role": "user", "content": clean_content}]
-        kwargs = dict(model=req.model, max_tokens=16000, system=system_prompt, messages=messages)
-        if req.web_search:
-            kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
-        response = client.messages.create(**kwargs)
-        # Collect text from all content blocks (handles web search tool results too)
-        text_parts = [b.text for b in response.content if hasattr(b, "text")]
-        return {"answer": "\n\n".join(text_parts) if text_parts else "No response generated."}
+    try:
+        # ── Claude ───────────────────────────────────────────────────────────
+        if req.provider == "anthropic":
+            client = get_anthropic_client()
+            # Strip internal keys from blocks before sending to Anthropic
+            clean_content = []
+            for block in user_content:
+                b = {k: v for k, v in block.items() if not k.startswith("_")}
+                clean_content.append(b)
+            messages = (req.history or []) + [{"role": "user", "content": clean_content}]
+            kwargs = dict(model=req.model, max_tokens=16000, system=system_prompt, messages=messages)
+            if req.web_search:
+                kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+            response = await client.messages.create(**kwargs)
+            # Collect text from all content blocks (handles web search tool results too)
+            text_parts = [b.text for b in response.content if hasattr(b, "text")]
+            return {"answer": "\n\n".join(text_parts) if text_parts else "No response generated."}
 
-    # ── GPT-4o ───────────────────────────────────────────────────────────────
-    elif req.provider == "openai":
-        client = get_openai_client()
+        # ── GPT-4o ───────────────────────────────────────────────────────────
+        elif req.provider == "openai":
+            client = get_openai_client()
 
-        if req.web_search:
-            # Use Responses API for built-in web search
-            def to_oai_resp(block):
+            if req.web_search:
+                # Use Responses API for built-in web search
+                def to_oai_resp(block):
+                    if block["type"] == "text":
+                        return {"type": "input_text", "text": block["text"]}
+                    if block["type"] == "image":
+                        src = block["source"]
+                        return {"type": "input_image", "image_url": f"data:{src['media_type']};base64,{src['data']}"}
+                    if block["type"] == "document":
+                        pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
+                        filename = block.get("_filename", "document.pdf")
+                        return {"type": "input_text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
+                    return {"type": "input_text", "text": ""}
+
+                resp_content = [to_oai_resp(b) for b in user_content]
+                messages = list(req.history or [])
+                messages.append({"role": "user", "content": resp_content})
+                response = await client.responses.create(
+                    model=req.model,
+                    instructions=system_prompt,
+                    input=messages,
+                    tools=[{"type": "web_search_preview"}],
+                )
+                return {"answer": response.output_text}
+
+            # convert blocks to OpenAI Chat Completions format
+            def to_oai(block):
                 if block["type"] == "text":
-                    return {"type": "input_text", "text": block["text"]}
+                    return {"type": "text", "text": block["text"]}
                 if block["type"] == "image":
                     src = block["source"]
-                    return {"type": "input_image", "image_url": f"data:{src['media_type']};base64,{src['data']}"}
+                    return {"type": "image_url", "image_url": {
+                        "url": f"data:{src['media_type']};base64,{src['data']}"
+                    }}
                 if block["type"] == "document":
                     pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
                     filename = block.get("_filename", "document.pdf")
-                    return {"type": "input_text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
-                return {"type": "input_text", "text": ""}
+                    return {"type": "text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
+                return {"type": "text", "text": ""}
 
-            resp_content = [to_oai_resp(b) for b in user_content]
-            messages = list(req.history or [])
-            messages.append({"role": "user", "content": resp_content})
-            response = client.responses.create(
-                model=req.model,
-                instructions=system_prompt,
-                input=messages,
-                tools=[{"type": "web_search_preview"}],
+            oai_content = [to_oai(b) for b in user_content]
+            messages    = [{"role": "system", "content": system_prompt}]
+            for h in (req.history or []):
+                messages.append(h)
+            messages.append({"role": "user", "content": oai_content})
+
+            response = await client.chat.completions.create(model=req.model, messages=messages, max_tokens=16000)
+            return {"answer": response.choices[0].message.content}
+
+        # ── Gemini (sync SDK — run in thread) ────────────────────────────────
+        elif req.provider == "gemini":
+            client = get_gemini_client()
+
+            # Build parts for the current message
+            parts: list = []
+            for block in user_content:
+                if block["type"] == "text":
+                    parts.append(gtypes.Part.from_text(text=block["text"]))
+                elif block["type"] == "image":
+                    src = block["source"]
+                    parts.append(gtypes.Part.from_bytes(
+                        data=base64.b64decode(src["data"]),
+                        mime_type=src["media_type"],
+                    ))
+                elif block["type"] == "document":
+                    parts.append(gtypes.Part.from_bytes(
+                        data=base64.b64decode(block["source"]["data"]),
+                        mime_type="application/pdf",
+                    ))
+
+            config = gtypes.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=16000,
+                tools=[gtypes.Tool(google_search=gtypes.GoogleSearch())] if req.web_search else None,
             )
-            return {"answer": response.output_text}
 
-        # convert blocks to OpenAI Chat Completions format
-        def to_oai(block):
-            if block["type"] == "text":
-                return {"type": "text", "text": block["text"]}
-            if block["type"] == "image":
-                src = block["source"]
-                return {"type": "image_url", "image_url": {
-                    "url": f"data:{src['media_type']};base64,{src['data']}"
-                }}
-            if block["type"] == "document":
-                # GPT-4o can't read raw PDFs — use pre-extracted text
-                pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
-                filename = block.get("_filename", "document.pdf")
-                return {"type": "text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
-            return {"type": "text", "text": ""}
-
-        oai_content = [to_oai(b) for b in user_content]
-        messages    = [{"role": "system", "content": system_prompt}]
-        for h in (req.history or []):
-            messages.append(h)
-        messages.append({"role": "user", "content": oai_content})
-
-        response = client.chat.completions.create(model=req.model, messages=messages, max_tokens=4096)
-        return {"answer": response.choices[0].message.content}
-
-    # ── Gemini ────────────────────────────────────────────────────────────────
-    elif req.provider == "gemini":
-        client = get_gemini_client()
-
-        # Build parts for the current message
-        parts: list = []
-        for block in user_content:
-            if block["type"] == "text":
-                parts.append(gtypes.Part.from_text(text=block["text"]))
-            elif block["type"] == "image":
-                src = block["source"]
-                parts.append(gtypes.Part.from_bytes(
-                    data=base64.b64decode(src["data"]),
-                    mime_type=src["media_type"],
-                ))
-            elif block["type"] == "document":
-                parts.append(gtypes.Part.from_bytes(
-                    data=base64.b64decode(block["source"]["data"]),
-                    mime_type="application/pdf",
+            # Build conversation history for Gemini
+            gemini_history: list = []
+            for h in (req.history or []):
+                role = "user" if h["role"] == "user" else "model"
+                gemini_history.append(gtypes.Content(
+                    role=role,
+                    parts=[gtypes.Part.from_text(text=h["content"])],
                 ))
 
-        config = gtypes.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=4096,
-            tools=[gtypes.Tool(google_search=gtypes.GoogleSearch())] if req.web_search else None,
-        )
+            def _gemini_call():
+                if gemini_history:
+                    chat_session = client.chats.create(
+                        model=req.model,
+                        config=config,
+                        history=gemini_history,
+                    )
+                    return chat_session.send_message(parts)
+                else:
+                    return client.models.generate_content(
+                        model=req.model,
+                        contents=parts,
+                        config=config,
+                    )
 
-        # Build conversation history for Gemini
-        gemini_history: list = []
-        for h in (req.history or []):
-            role = "user" if h["role"] == "user" else "model"
-            gemini_history.append(gtypes.Content(
-                role=role,
-                parts=[gtypes.Part.from_text(text=h["content"])],
-            ))
+            response = await asyncio.to_thread(_gemini_call)
+            return {"answer": response.text}
 
-        if gemini_history:
-            chat_session = client.chats.create(
-                model=req.model,
-                config=config,
-                history=gemini_history,
-            )
-            response = chat_session.send_message(parts)
+        # ── xAI (Grok) ──────────────────────────────────────────────────────
+        elif req.provider == "xai":
+            client = get_xai_client()
+
+            # xAI uses OpenAI-compatible format
+            def to_xai(block):
+                if block["type"] == "text":
+                    return {"type": "text", "text": block["text"]}
+                if block["type"] == "image":
+                    src = block["source"]
+                    return {"type": "image_url", "image_url": {
+                        "url": f"data:{src['media_type']};base64,{src['data']}"
+                    }}
+                if block["type"] == "document":
+                    pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
+                    filename = block.get("_filename", "document.pdf")
+                    return {"type": "text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
+                return {"type": "text", "text": ""}
+
+            xai_content = [to_xai(b) for b in user_content]
+            messages    = [{"role": "system", "content": system_prompt}]
+            for h in (req.history or []):
+                messages.append(h)
+            messages.append({"role": "user", "content": xai_content})
+
+            kwargs = dict(model=req.model, messages=messages, max_tokens=16000)
+            if req.web_search:
+                kwargs["extra_body"] = {"search_parameters": {"mode": "auto", "max_search_results": 5}}
+            response = await client.chat.completions.create(**kwargs)
+            return {"answer": response.choices[0].message.content}
+
         else:
-            response = client.models.generate_content(
-                model=req.model,
-                contents=parts,
-                config=config,
-            )
+            raise HTTPException(status_code=400, detail="Unknown provider")
 
-        return {"answer": response.text}
-
-    # ── xAI (Grok) ────────────────────────────────────────────────────────────
-    elif req.provider == "xai":
-        client = get_xai_client()
-
-        # xAI uses OpenAI-compatible format
-        def to_xai(block):
-            if block["type"] == "text":
-                return {"type": "text", "text": block["text"]}
-            if block["type"] == "image":
-                src = block["source"]
-                return {"type": "image_url", "image_url": {
-                    "url": f"data:{src['media_type']};base64,{src['data']}"
-                }}
-            if block["type"] == "document":
-                pdf_text = block.get("_pdf_text", "[PDF content unavailable]")
-                filename = block.get("_filename", "document.pdf")
-                return {"type": "text", "text": f"--- FILE: {filename} ---\n{pdf_text}\n"}
-            return {"type": "text", "text": ""}
-
-        xai_content = [to_xai(b) for b in user_content]
-        messages    = [{"role": "system", "content": system_prompt}]
-        for h in (req.history or []):
-            messages.append(h)
-        messages.append({"role": "user", "content": xai_content})
-
-        kwargs = dict(model=req.model, messages=messages, max_tokens=4096)
-        if req.web_search:
-            kwargs["extra_body"] = {"search_parameters": {"mode": "auto", "max_search_results": 5}}
-        response = client.chat.completions.create(**kwargs)
-        return {"answer": response.choices[0].message.content}
-
-    else:
-        raise HTTPException(status_code=400, detail="Unknown provider")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("AI request failed: provider=%s model=%s error=%s", req.provider, req.model, e, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"AI provider error: {str(e)}")
 
 
 # serve frontend
